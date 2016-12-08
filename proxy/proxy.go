@@ -1,11 +1,8 @@
 package proxy
 
 import (
-	"bufio"
-	"bytes"
 	"crypto/tls"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -26,13 +23,11 @@ import (
 	"code.cloudfoundry.org/lager"
 	"github.com/cloudfoundry/dropsonde"
 	"github.com/urfave/negroni"
-	"github.com/valyala/fasthttp"
 )
 
 const (
 	VcapCookieId    = "__VCAP_ID__"
 	StickyCookieKey = "JSESSIONID"
-	MaxRetries      = 3
 )
 
 type LookupRegistry interface {
@@ -191,60 +186,6 @@ func (p *proxy) lookup(request *http.Request) *route.Pool {
 	}
 
 	return p.registry.Lookup(uri)
-}
-
-// RouteRequest routes a request to the a configured backend endpoint
-func (p *proxy) RouteRequest(
-	rw http.ResponseWriter,
-	req *http.Request,
-	endpointIter route.EndpointIterator,
-) {
-	backendReq := fasthttp.AcquireRequest()
-	backendResp := fasthttp.AcquireResponse()
-	defer fasthttp.ReleaseRequest(backendReq)
-	defer fasthttp.ReleaseResponse(backendResp)
-
-	copyRequest(req, backendReq)
-
-	// TODO: Strip hop-by-hop headers
-
-	for retry := 0; retry < MaxRetries; retry++ {
-		endpoint := endpointIter.Next()
-		if endpoint == nil {
-			rw.WriteHeader(http.StatusBadGateway)
-			// TODO: Message for no endpoints available
-			return
-		}
-		// TODO: Log endpoint?
-
-		backendReq.SetRequestURI("http://" + endpoint.CanonicalAddr())
-
-		err := fasthttp.Do(backendReq, backendResp)
-		if err != nil {
-			fmt.Printf("http: proxy error: %v\n", err)
-			rw.WriteHeader(http.StatusBadGateway)
-			return
-		}
-		break
-	}
-
-	// TODO: Strip hop-by-hop headers, add trailers?
-	rw.WriteHeader(backendResp.StatusCode())
-	err := backendResp.BodyWriteTo(rw)
-	if err != nil {
-		rw.WriteHeader(http.StatusBadGateway)
-		// TODO: How do we handle this case?
-	}
-}
-
-func copyRequest(req *http.Request, newreq *fasthttp.Request) error {
-	buf := new(bytes.Buffer)
-	err := req.Write(buf)
-	if err != nil {
-		return err
-	}
-
-	return newreq.Read(bufio.NewReader(buf))
 }
 
 func (p *proxy) ServeHTTP(responseWriter http.ResponseWriter, request *http.Request) {
