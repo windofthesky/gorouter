@@ -134,7 +134,7 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 
 	buf := new(bytes.Buffer)
 	backendResp.WriteTo(buf)
-	fmt.Println(buf.String())
+	// fmt.Println(buf.String())
 
 	next(rw, req)
 }
