@@ -1,7 +1,6 @@
 package proxy_test
 
 import (
-	"fmt"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -24,7 +23,7 @@ import (
 	"github.com/urfave/negroni"
 )
 
-var _ = FDescribe("FastReverseProxy", func() {
+var _ = Describe("FastReverseProxy", func() {
 	var (
 		handler            negroni.Handler
 		testServer         *ghttp.Server
@@ -77,7 +76,7 @@ var _ = FDescribe("FastReverseProxy", func() {
 	})
 
 	AfterEach(func() {
-		Expect(nextCalled).To(BeTrue())
+		testServer.Close()
 	})
 
 	It("routes the request to the correct backend", func() {
@@ -92,9 +91,10 @@ var _ = FDescribe("FastReverseProxy", func() {
 		handler.ServeHTTP(resp, req, nextHandler)
 
 		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
-		Expect(resp.Code).To(Equal(200))
+		Expect(resp.Code).To(Equal(http.StatusOK))
 
 		Expect(resp.Body.String()).To(Equal(testBody))
+		Expect(nextCalled).To(BeTrue())
 	})
 
 	It("transparently sends end-to-end headers to the backend", func() {
@@ -129,9 +129,10 @@ var _ = FDescribe("FastReverseProxy", func() {
 		handler.ServeHTTP(resp, req, nextHandler)
 
 		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
-		Expect(resp.Code).To(Equal(200))
+		Expect(resp.Code).To(Equal(http.StatusOK))
 		Expect(resp.Header().Get("X-Foo-Header")).To(Equal("foo"))
 		Expect(resp.Header().Get("X-Bar-Header")).To(Equal("bar"))
+		Expect(nextCalled).To(BeTrue())
 	})
 
 	XIt("transparently returns trailers from the backend", func() {
@@ -141,28 +142,17 @@ var _ = FDescribe("FastReverseProxy", func() {
 				func(w http.ResponseWriter, req *http.Request) {
 					w.Header().Set("Trailer", "X-Foo-Trailer")
 					w.WriteHeader(200)
-					flusher, ok := w.(http.Flusher)
-					Expect(ok).To(BeTrue(), "Expected http.ResponseWriter to be an http.Flusher")
-					for i := 1; i <= 2; i++ {
-						fmt.Fprintf(w, "Chunk #%d\n", i)
-						flusher.Flush() // Trigger "chunked" encoding and send a chunk...
-					}
-					fmt.Fprintf(w, "\r\n")
-					flusher.Flush() // Trigger "chunked" encoding and send a chunk...
-
-					w.Header().Add("X-Foo-Trailer", "foo")
+					w.Header().Set("X-Foo-Trailer", "foo")
 				},
 			),
-			func(w http.ResponseWriter, req *http.Request) {
-			},
 		)
 		req := test_util.NewRequest("POST", testServerRoute, "/", nil)
 		handler.ServeHTTP(resp, req, nextHandler)
 
-		Expect(resp.Code).To(Equal(200))
+		Expect(resp.Code).To(Equal(http.StatusOK))
 		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
-		// Expect(resp.Header().Get("X-Foo-Trailer")).To(Equal("foo"))
-		// Expect(resp.Header().Get("X-Bar-Trailer")).To(Equal("bar"))
+		Expect(resp.Result().Trailer.Get("X-Foo-Trailer")).To(Equal("foo"))
+		Expect(nextCalled).To(BeTrue())
 	})
 
 	It("strips hop-by-hop headers from the incoming request", func() {
@@ -185,6 +175,40 @@ var _ = FDescribe("FastReverseProxy", func() {
 		handler.ServeHTTP(resp, req, nextHandler)
 
 		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
+		Expect(nextCalled).To(BeTrue())
+	})
+
+	It("adds X-Forwarded-For to the request", func() {
+		testServer.AppendHandlers(
+			ghttp.CombineHandlers(
+				ghttp.VerifyRequest("GET", "/"),
+				ghttp.VerifyHeaderKV("X-Forwarded-For", "192.0.2.255"),
+				ghttp.RespondWith(200, nil),
+			),
+		)
+		req := test_util.NewRequest("GET", testServerRoute, "/", nil)
+		req.RemoteAddr = "192.0.2.255:8709"
+		handler.ServeHTTP(resp, req, nextHandler)
+
+		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
+		Expect(nextCalled).To(BeTrue())
+	})
+
+	It("appends to X-Forwarded-For to the request if the header already exists", func() {
+		testServer.AppendHandlers(
+			ghttp.CombineHandlers(
+				ghttp.VerifyRequest("GET", "/"),
+				ghttp.VerifyHeaderKV("X-Forwarded-For", "192.0.2.254, 192.0.2.255"),
+				ghttp.RespondWith(200, nil),
+			),
+		)
+		req := test_util.NewRequest("GET", testServerRoute, "/", nil)
+		req.Header.Set("X-Forwarded-For", "192.0.2.254")
+		req.RemoteAddr = "192.0.2.255:8080"
+		handler.ServeHTTP(resp, req, nextHandler)
+
+		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
+		Expect(nextCalled).To(BeTrue())
 	})
 
 	It("strips hop-by-hop headers from the response", func() {
@@ -202,10 +226,27 @@ var _ = FDescribe("FastReverseProxy", func() {
 		handler.ServeHTTP(resp, req, nextHandler)
 
 		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
-		Expect(resp.Code).To(Equal(200))
+		Expect(resp.Code).To(Equal(http.StatusOK))
 		for _, h := range proxy.HopHeaders {
 			Expect(resp.Header()).ToNot(HaveKey(h))
 		}
+		Expect(nextCalled).To(BeTrue())
+	})
+
+	Context("when there are no backends present", func() {
+		BeforeEach(func() {
+			reg.LookupStub = func(uri route.Uri) *route.Pool {
+				return nil
+			}
+		})
+		It("fails with 404 Not Found", func() {
+			req := test_util.NewRequest("GET", testServerRoute, "/", nil)
+			handler.ServeHTTP(resp, req, nextHandler)
+
+			Expect(testServer.ReceivedRequests()).To(HaveLen(0))
+			Expect(resp.Code).To(Equal(http.StatusNotFound))
+			Expect(nextCalled).To(BeFalse())
+		})
 	})
 
 	Context("when a connection attempt to a backend fails", func() {
@@ -223,6 +264,9 @@ var _ = FDescribe("FastReverseProxy", func() {
 				return nil
 			}
 		})
+		AfterEach(func() {
+			Expect(nextCalled).To(BeTrue())
+		})
 		It("retries the connection with other backends", func() {
 			testServer.AppendHandlers(
 				ghttp.CombineHandlers(
@@ -231,12 +275,79 @@ var _ = FDescribe("FastReverseProxy", func() {
 				),
 			)
 			req := test_util.NewRequest("GET", testServerRoute, "/", nil)
-			for _, h := range proxy.HopHeaders {
-				req.Header.Add(h, "some-value")
-			}
 			handler.ServeHTTP(resp, req, nextHandler)
 
 			Expect(testServer.ReceivedRequests()).To(HaveLen(1))
+		})
+	})
+
+	Context("when the backend request fails for reasons other than dial timeout", func() {
+		BeforeEach(func() {
+			pool := route.NewPool(1*time.Second, "")
+			badEndpoint := route.NewEndpoint("foo", "non-existent.foo", uint16(80), "", "", nil, -1, "", models.ModificationTag{})
+			_ = pool.Put(badEndpoint)
+			reg.LookupStub = func(uri route.Uri) *route.Pool {
+				if uri.String() == testServerRoute {
+					return pool
+				}
+				return nil
+			}
+		})
+		AfterEach(func() {
+			Expect(nextCalled).To(BeFalse())
+		})
+		It("fails with 502 Bad Gateway", func() {
+			req := test_util.NewRequest("GET", testServerRoute, "/", nil)
+			handler.ServeHTTP(resp, req, nextHandler)
+
+			Expect(testServer.ReceivedRequests()).To(BeEmpty())
+			Expect(resp.Code).To(Equal(http.StatusBadGateway))
+		})
+	})
+
+	Context("when all connection attempts to backends fail", func() {
+		BeforeEach(func() {
+			pool := route.NewPool(1*time.Second, "")
+			badEndpoint := route.NewEndpoint("foo", "192.0.2.1", uint16(80), "", "", nil, -1, "", models.ModificationTag{})
+			_ = pool.Put(badEndpoint)
+			reg.LookupStub = func(uri route.Uri) *route.Pool {
+				if uri.String() == testServerRoute {
+					return pool
+				}
+				return nil
+			}
+		})
+		AfterEach(func() {
+			Expect(nextCalled).To(BeFalse())
+		})
+		It("fails with 502 Bad Gateway", func() {
+			req := test_util.NewRequest("GET", testServerRoute, "/", nil)
+			handler.ServeHTTP(resp, req, nextHandler)
+
+			Expect(testServer.ReceivedRequests()).To(BeEmpty())
+			Expect(resp.Code).To(Equal(http.StatusBadGateway))
+		})
+	})
+
+	Context("when no endpoints are available for the route", func() {
+		BeforeEach(func() {
+			pool := route.NewPool(1*time.Second, "")
+			reg.LookupStub = func(uri route.Uri) *route.Pool {
+				if uri.String() == testServerRoute {
+					return pool
+				}
+				return nil
+			}
+		})
+		AfterEach(func() {
+			Expect(nextCalled).To(BeFalse())
+		})
+		It("fails with 502 Bad Gateway", func() {
+			req := test_util.NewRequest("GET", testServerRoute, "/", nil)
+			handler.ServeHTTP(resp, req, nextHandler)
+
+			Expect(testServer.ReceivedRequests()).To(BeEmpty())
+			Expect(resp.Code).To(Equal(http.StatusBadGateway))
 		})
 	})
 })

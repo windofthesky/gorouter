@@ -17,7 +17,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("Route Services", func() {
+var _ = XDescribe("Route Services", func() {
 	var (
 		routeServiceListener net.Listener
 		routeServiceHandler  http.Handler

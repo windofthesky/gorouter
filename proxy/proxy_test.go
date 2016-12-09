@@ -35,7 +35,7 @@ import (
 
 type connHandler func(*test_util.HttpConn)
 
-var _ = Describe("Proxy", func() {
+var _ = FDescribe("Proxy", func() {
 
 	It("responds to http/1.0 with path", func() {
 		ln := registerHandler(r, "test/my_path", func(conn *test_util.HttpConn) {
@@ -86,7 +86,7 @@ var _ = Describe("Proxy", func() {
 		Expect(resp.StatusCode).To(Equal(http.StatusOK))
 	})
 
-	It("Content-type is not set by proxy", func() {
+	FIt("Content-type is not set by proxy", func() {
 		ln := registerHandler(r, "content-test", func(x *test_util.HttpConn) {
 			_, err := http.ReadRequest(x.Reader)
 			Expect(err).NotTo(HaveOccurred())
@@ -105,6 +105,7 @@ var _ = Describe("Proxy", func() {
 		x.WriteRequest(req)
 
 		resp, _ := x.ReadResponse()
+		fmt.Println(resp)
 		h, present := resp.Header["Content-Type"]
 		Expect(present).To(BeFalse())
 		Expect(h).To(BeNil())

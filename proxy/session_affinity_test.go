@@ -11,7 +11,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("Session Affinity", func() {
+var _ = XDescribe("Session Affinity", func() {
 	var done chan bool
 	var jSessionIdCookie *http.Cookie
 
