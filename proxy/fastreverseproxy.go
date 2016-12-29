@@ -3,12 +3,20 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"strings"
 
+	"code.cloudfoundry.org/gorouter/access_log/schema"
+	router_http "code.cloudfoundry.org/gorouter/common/http"
+	"code.cloudfoundry.org/gorouter/metrics/reporter"
+	"code.cloudfoundry.org/gorouter/proxy/handler"
+	"code.cloudfoundry.org/gorouter/proxy/utils"
 	"code.cloudfoundry.org/gorouter/route"
+	"code.cloudfoundry.org/gorouter/routeservice"
+	"code.cloudfoundry.org/lager"
 
 	"github.com/valyala/fasthttp"
 )
@@ -36,13 +44,36 @@ const (
 // FastReverseProxy is responsible for proxying requests to the backend using
 // fasthttp
 type FastReverseProxy struct {
-	registry LookupRegistry
+	registry                 LookupRegistry
+	logger                   lager.Logger
+	reporter                 reporter.ProxyReporter
+	routeServiceConfig       *routeservice.RouteServiceConfig
+	defaultLoadBalance       string
+	forceForwardedProtoHttps bool
+	traceKey                 string
+	ip                       string
+	secureCookies            bool
 }
 
 // NewFastReverseProxy creates a new FastReverseProxy
-func NewFastReverseProxy(registry LookupRegistry) *FastReverseProxy {
+func NewFastReverseProxy(registry LookupRegistry, logger lager.Logger,
+	reporter reporter.ProxyReporter, routeServiceConfig *routeservice.RouteServiceConfig,
+	forceForwardedProtoHttps bool,
+	traceKey string, defaultLoadBalance string,
+	ip string, secureCookies bool) *FastReverseProxy {
+
+	//	routeServiceConfig := routeservice.NewRouteServiceConfig(logger, routeServiceEnabled, routeServiceTimeout, crypto, cryptoPrev, routeServiceRecommendHttps)
+
 	return &FastReverseProxy{
-		registry: registry,
+		registry:                 registry,
+		logger:                   logger,
+		reporter:                 reporter,
+		forceForwardedProtoHttps: forceForwardedProtoHttps,
+		routeServiceConfig:       routeServiceConfig,
+		traceKey:                 traceKey,
+		ip:                       ip,
+		defaultLoadBalance:       defaultLoadBalance,
+		//		secureCookies:            secureCookies,
 	}
 }
 
@@ -51,6 +82,14 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	backendResp := fasthttp.AcquireResponse()
 	defer fasthttp.ReleaseRequest(backendReq)
 	defer fasthttp.ReleaseResponse(backendResp)
+
+	proxyWriter := rw.(utils.ProxyResponseWriter)
+	alr := proxyWriter.Context().Value("AccessLogRecord")
+	if alr == nil {
+		fmt.Printf("AccessLogRecord not set on context", errors.New("failed-to-access-LogRecord"))
+	}
+	accessLog := alr.(*schema.AccessLogRecord)
+	handler := handler.NewRequestHandler(req, proxyWriter, f.reporter, accessLog, f.logger)
 
 	copyRequest(req, backendReq)
 
@@ -75,18 +114,54 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	// 	fmt.Printf("got an error %s\n", err.Error())
 	// }
 
+	if !isProtocolSupported(req) {
+		handler.HandleUnsupportedProtocol()
+		return
+	}
+
 	requestPath := req.URL.EscapedPath()
 	uri := route.Uri(hostWithoutPort(req) + requestPath)
 	pool := f.registry.Lookup(uri)
 	if pool == nil {
-		rw.WriteHeader(http.StatusNotFound)
+		//		fmt.Println("no route present")
+		handler.HandleMissingRoute()
 		return
 	}
+
+	stickyEndpointId := getStickySession(req)
+	iter := &wrappedIterator{
+		//"round-robin": defaultLoadBalance
+		nested: pool.Endpoints(f.defaultLoadBalance, stickyEndpointId),
+
+		afterNext: func(endpoint *route.Endpoint) {
+			if endpoint != nil {
+				accessLog.RouteEndpoint = endpoint
+				f.reporter.CaptureRoutingRequest(endpoint, req)
+			}
+		},
+	}
+
+	if isTcpUpgrade(req) {
+		handler.HandleTcpRequest(iter)
+		return
+	}
+
+	if isWebSocketUpgrade(req) {
+		handler.HandleWebSocketRequest(iter)
+		return
+	}
+
+	//backend := true
+
+	// routeServiceUrl := pool.RouteServiceUrl()
+	// router_service.ForwardRouter(routerServiceUrl, f.routeServiceConfig)
+
 	endpoints := pool.Endpoints("", "")
 
 	timedOut := true
+	var endpoint *route.Endpoint
 	for retry := 0; retry < maxRetries; retry++ {
-		endpoint := endpoints.Next()
+		endpoint = endpoints.Next()
 		if endpoint == nil {
 			rw.WriteHeader(http.StatusBadGateway)
 			fmt.Printf("http: no endpoints available for %s\n", uri)
@@ -137,8 +212,73 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	// fmt.Println(buf.String())
 
 	next(rw, req)
+
+	//		accessLog.FirstByteAt = time.Now()
+	if backendResp != nil {
+		accessLog.StatusCode = backendResp.StatusCode()
+	}
+
+	if f.traceKey != "" && endpoint != nil && req.Header.Get(router_http.VcapTraceHeader) == f.traceKey {
+		router_http.SetTraceHeaders(rw, f.ip, endpoint.CanonicalAddr())
+	}
+
+	//	latency := time.Since(accessLog.StartedAt)
+
+	//	f.reporter.CaptureRoutingResponse(endpoint, backendResp, accessLog.StartedAt, latency)
+
+	if endpoint.PrivateInstanceId != "" {
+		setupStickySession(backendResp.Header, endpoint,
+			stickyEndpointId, f.secureCookies, pool.ContextPath())
+	}
+
+	// if Content-Type not in response, nil out to suppress Go's auto-detect
+	if ok := backendResp.Header.Peek("Content-Type"); len(ok) == 0 {
+		rw.Header().Del("Content-Type")
+	}
 }
 
+func setupStickySession(respHeader fasthttp.ResponseHeader,
+	endpoint *route.Endpoint,
+	originalEndpointId string,
+	secureCookies bool,
+	path string) {
+	//	secure := false
+	//	maxAge := 0
+	//time.Date()
+
+	// did the endpoint change?
+	sticky := originalEndpointId != "" && originalEndpointId != endpoint.PrivateInstanceId
+
+	cookieFunc := func(key, value []byte) {
+		if string(key) == StickyCookieKey {
+			sticky = true
+			//	if v.MaxAge < 0 {
+			//			maxAge = v.MaxAge
+			//		}
+			//		secure = v.Secure
+			//			break
+		}
+	}
+
+	respHeader.VisitAllCookie(cookieFunc)
+	if sticky {
+		// right now secure attribute would as equal to the JSESSION ID cookie (if present),
+		// but override if set to true in config
+		fcookie := fasthttp.AcquireCookie()
+		defer fasthttp.ReleaseCookie(fcookie)
+
+		if secureCookies {
+			fcookie.Secure()
+			//	secure = true
+		}
+		fcookie.SetKey(VcapCookieId)
+		fcookie.SetValue(endpoint.PrivateInstanceId)
+		fcookie.SetPath(path)
+		fcookie.SetHTTPOnly(true)
+		//	fcookie.SetExpire(time.Time(maxAge))
+		respHeader.SetCookie(fcookie)
+	}
+}
 func copyRequest(req *http.Request, newreq *fasthttp.Request) error {
 	buf := new(bytes.Buffer)
 	err := req.Write(buf)
@@ -159,4 +299,27 @@ func hostWithoutPort(req *http.Request) string {
 	}
 
 	return host
+}
+
+func isProtocolSupported(request *http.Request) bool {
+	return request.ProtoMajor == 1 && (request.ProtoMinor == 0 || request.ProtoMinor == 1)
+}
+
+func getStickySession(request *http.Request) string {
+	// Try choosing a backend using sticky session
+	if _, err := request.Cookie(StickyCookieKey); err == nil {
+		if sticky, err := request.Cookie(VcapCookieId); err == nil {
+			return sticky.Value
+		}
+	}
+	return ""
+}
+
+func isWebSocketUpgrade(request *http.Request) bool {
+	// websocket should be case insensitive per RFC6455 4.2.1
+	return strings.ToLower(upgradeHeader(request)) == "websocket"
+}
+
+func isTcpUpgrade(request *http.Request) bool {
+	return upgradeHeader(request) == "tcp"
 }

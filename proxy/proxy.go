@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"code.cloudfoundry.org/gorouter/access_log"
@@ -123,11 +124,13 @@ func NewProxy(args ProxyArgs) Proxy {
 		healthCheckUserAgent:       args.HealthCheckUserAgent,
 		forceForwardedProtoHttps:   args.ForceForwardedProtoHttps,
 		defaultLoadBalance:         args.DefaultLoadBalance,
-		fastProxy:                  NewFastReverseProxy(args.Registry),
+		fastProxy: NewFastReverseProxy(args.Registry, args.Logger,
+			args.Reporter, routeServiceConfig,
+			args.ForceForwardedProtoHttps, args.TraceKey, args.DefaultLoadBalance,
+			args.Ip, args.SecureCookies),
 	}
 
 	n := negroni.New()
-	n.Use(p)
 	n.Use(&proxyWriterHandler{})
 	n.Use(handlers.NewAccessLog(args.AccessLogger, args.ExtraHeadersToLog))
 	n.Use(handlers.NewHealthcheck(args.HealthCheckUserAgent, p.heartbeatOK, args.Logger))
@@ -142,195 +145,173 @@ func NewProxy(args ProxyArgs) Proxy {
 	return handlers
 }
 
-func hostWithoutPort(req *http.Request) string {
-	host := req.Host
+// func (p *proxy) ServeHTTP(responseWriter http.ResponseWriter, request *http.Request, next http.HandlerFunc) {
+// 	proxyWriter := responseWriter.(utils.ProxyResponseWriter)
 
-	// Remove :<port>
-	pos := strings.Index(host, ":")
-	if pos >= 0 {
-		host = host[0:pos]
-	}
+// 	alr := proxyWriter.Context().Value("AccessLogRecord")
+// 	if alr == nil {
+// 		p.logger.Error("AccessLogRecord not set on context", errors.New("failed-to-access-LogRecord"))
+// 	}
+// 	accessLog := alr.(*schema.AccessLogRecord)
 
-	return host
-}
+// 	handler := handler.NewRequestHandler(request, proxyWriter, p.reporter, accessLog, p.logger)
 
-func (p *proxy) getStickySession(request *http.Request) string {
-	// Try choosing a backend using sticky session
-	if _, err := request.Cookie(StickyCookieKey); err == nil {
-		if sticky, err := request.Cookie(VcapCookieId); err == nil {
-			return sticky.Value
-		}
-	}
-	return ""
-}
+// 	// 	if !isProtocolSupported(request) {
+// 	// 		handler.HandleUnsupportedProtocol()
+// 	// 		return
+// 	// 	}
 
-func (p *proxy) ServeHTTP(responseWriter http.ResponseWriter, request *http.Request,  next http.HandlerFunc) {
-	proxyWriter := responseWriter.(utils.ProxyResponseWriter)
+// 	routePool := p.lookup(request)
+// 	if routePool == nil {
+// 		handler.HandleMissingRoute()
+// 		return
+// 	}
 
-	alr := proxyWriter.Context().Value("AccessLogRecord")
-	if alr == nil {
-		p.logger.Error("AccessLogRecord not set on context", errors.New("failed-to-access-LogRecord"))
-	}
-	accessLog := alr.(*schema.AccessLogRecord)
+// 	stickyEndpointId := p.getStickySession(request)
+// 	iter := &wrappedIterator{
+// 		nested: routePool.Endpoints(p.defaultLoadBalance, stickyEndpointId),
 
-	handler := handler.NewRequestHandler(request, proxyWriter, p.reporter, accessLog, p.logger)
+// 		afterNext: func(endpoint *route.Endpoint) {
+// 			if endpoint != nil {
+// 				accessLog.RouteEndpoint = endpoint
+// 				p.reporter.CaptureRoutingRequest(endpoint, request)
+// 			}
+// 		},
+// 	}
 
-	if !isProtocolSupported(request) {
-		handler.HandleUnsupportedProtocol()
-		return
-	}
+// 	if isTcpUpgrade(request) {
+// 		handler.HandleTcpRequest(iter)
+// 		return
+// 	}
 
-	routePool := p.lookup(request)
-	if routePool == nil {
-		handler.HandleMissingRoute()
-		return
-	}
+// 	if isWebSocketUpgrade(request) {
+// 		handler.HandleWebSocketRequest(iter)
+// 		return
+// 	}
 
-	stickyEndpointId := p.getStickySession(request)
-	iter := &wrappedIterator{
-		nested: routePool.Endpoints(p.defaultLoadBalance, stickyEndpointId),
+// 	// backend := true
 
-		afterNext: func(endpoint *route.Endpoint) {
-			if endpoint != nil {
-				accessLog.RouteEndpoint = endpoint
-				p.reporter.CaptureRoutingRequest(endpoint, request)
-			}
-		},
-	}
+// 	// routeServiceUrl := routePool.RouteServiceUrl()
+// 	// // Attempted to use a route service when it is not supported
+// 	// if routeServiceUrl != "" && !p.routeServiceConfig.RouteServiceEnabled() {
+// 	// 	handler.HandleUnsupportedRouteService()
+// 	// 	return
+// 	// }
 
-	if isTcpUpgrade(request) {
-		handler.HandleTcpRequest(iter)
-		return
-	}
+// 	// var routeServiceArgs routeservice.RouteServiceRequest
+// 	// if routeServiceUrl != "" {
+// 	// 	rsSignature := request.Header.Get(routeservice.RouteServiceSignature)
 
-	if isWebSocketUpgrade(request) {
-		handler.HandleWebSocketRequest(iter)
-		return
-	}
+// 	// 	var recommendedScheme string
 
-	backend := true
+// 	// 	if p.routeServiceRecommendHttps {
+// 	// 		recommendedScheme = "https"
+// 	// 	} else {
+// 	// 		recommendedScheme = "http"
+// 	// 	}
 
-	routeServiceUrl := routePool.RouteServiceUrl()
-	// Attempted to use a route service when it is not supported
-	if routeServiceUrl != "" && !p.routeServiceConfig.RouteServiceEnabled() {
-		handler.HandleUnsupportedRouteService()
-		return
-	}
+// 	// 	forwardedUrlRaw := recommendedScheme + "://" + hostWithoutPort(request) + request.RequestURI
+// 	// 	if hasBeenToRouteService(routeServiceUrl, rsSignature) {
+// 	// 		// A request from a route service destined for a backend instances
+// 	// 		routeServiceArgs.URLString = routeServiceUrl
+// 	// 		err := p.routeServiceConfig.ValidateSignature(&request.Header, forwardedUrlRaw)
+// 	// 		if err != nil {
+// 	// 			handler.HandleBadSignature(err)
+// 	// 			return
+// 	// 		}
+// 	// 	} else {
+// 	// 		var err error
+// 	// 		// should not hardcode http, will be addressed by #100982038
+// 	// 		routeServiceArgs, err = p.routeServiceConfig.Request(routeServiceUrl, forwardedUrlRaw)
+// 	// 		backend = false
+// 	// 		if err != nil {
+// 	// 			handler.HandleRouteServiceFailure(err)
+// 	// 			return
+// 	// 		}
+// 	// 	}
+// 	// }
+// 	next(rw, req)
+// 	// after := func(rsp *http.Response, endpoint *route.Endpoint, err error) {
+// 	// 	if endpoint == nil {
+// 	// 		handler.HandleBadGateway(err, request)
+// 	// 		return
+// 	// 	}
 
-	var routeServiceArgs routeservice.RouteServiceRequest
-	if routeServiceUrl != "" {
-		rsSignature := request.Header.Get(routeservice.RouteServiceSignature)
+// 	// 	accessLog.FirstByteAt = time.Now()
+// 	// 	if rsp != nil {
+// 	// 		accessLog.StatusCode = rsp.StatusCode
+// 	// 	}
 
-		var recommendedScheme string
+// 	// 	if p.traceKey != "" && endpoint != nil && request.Header.Get(router_http.VcapTraceHeader) == p.traceKey {
+// 	// 		router_http.SetTraceHeaders(responseWriter, p.ip, endpoint.CanonicalAddr())
+// 	// 	}
 
-		if p.routeServiceRecommendHttps {
-			recommendedScheme = "https"
-		} else {
-			recommendedScheme = "http"
-		}
+// 	// 	latency := time.Since(accessLog.StartedAt)
 
-		forwardedUrlRaw := recommendedScheme + "://" + hostWithoutPort(request) + request.RequestURI
-		if hasBeenToRouteService(routeServiceUrl, rsSignature) {
-			// A request from a route service destined for a backend instances
-			routeServiceArgs.URLString = routeServiceUrl
-			err := p.routeServiceConfig.ValidateSignature(&request.Header, forwardedUrlRaw)
-			if err != nil {
-				handler.HandleBadSignature(err)
-				return
-			}
-		} else {
-			var err error
-			// should not hardcode http, will be addressed by #100982038
-			routeServiceArgs, err = p.routeServiceConfig.Request(routeServiceUrl, forwardedUrlRaw)
-			backend = false
-			if err != nil {
-				handler.HandleRouteServiceFailure(err)
-				return
-			}
-		}
-	}
-	next(rw, req)
-	after := func(rsp *http.Response, endpoint *route.Endpoint, err error) {
-		if endpoint == nil {
-			handler.HandleBadGateway(err, request)
-			return
-		}
+// 	// 	p.reporter.CaptureRoutingResponse(endpoint, rsp, accessLog.StartedAt, latency)
 
-		accessLog.FirstByteAt = time.Now()
-		if rsp != nil {
-			accessLog.StatusCode = rsp.StatusCode
-		}
+// 	// 	if err != nil {
+// 	// 		handler.HandleBadGateway(err, request)
+// 	// 		return
+// 	// 	}
 
-		if p.traceKey != "" && endpoint != nil && request.Header.Get(router_http.VcapTraceHeader) == p.traceKey {
-			router_http.SetTraceHeaders(responseWriter, p.ip, endpoint.CanonicalAddr())
-		}
+// 	// 	if endpoint.PrivateInstanceId != "" {
+// 	// 		setupStickySession(responseWriter, rsp, endpoint, stickyEndpointId, p.secureCookies, routePool.ContextPath())
+// 	// 	}
 
-		latency := time.Since(accessLog.StartedAt)
+// 	// 	// if Content-Type not in response, nil out to suppress Go's auto-detect
+// 	// 	if _, ok := rsp.Header["Content-Type"]; !ok {
+// 	// 		responseWriter.Header()["Content-Type"] = nil
+// 	// 	}
+// 	// }
 
-		p.reporter.CaptureRoutingResponse(endpoint, rsp, accessLog.StartedAt, latency)
+// 	//	roundTripper := round_tripper.NewProxyRoundTripper(backend,
+// 	//		dropsonde.InstrumentedRoundTripper(p.transport), iter, handler.Logger(), after)
 
-		if err != nil {
-			handler.HandleBadGateway(err, request)
-			return
-		}
+// 	//	newReverseProxy(roundTripper, request, routeServiceArgs, p.routeServiceConfig, p.forceForwardedProtoHttps).ServeHTTP(proxyWriter, request)
+// }
 
-		if endpoint.PrivateInstanceId != "" {
-			setupStickySession(responseWriter, rsp, endpoint, stickyEndpointId, p.secureCookies, routePool.ContextPath())
-		}
+// func handleRouteServiceIntegration(
+// 	target *http.Request,
+// 	routeServiceArgs routeservice.RouteServiceRequest,
+// 	routeServiceConfig *routeservice.RouteServiceConfig,
+// ) {
+// 	sig := target.Header.Get(routeservice.RouteServiceSignature)
+// 	if forwardingToRouteService(routeServiceArgs.URLString, sig) {
+// 		// An endpoint has a route service and this request did not come from the service
+// 		target.Header.Set(routeservice.RouteServiceSignature, routeServiceArgs.Signature)
+// 		target.Header.Set(routeservice.RouteServiceMetadata, routeServiceArgs.Metadata)
+// 		target.Header.Set(routeservice.RouteServiceForwardedURL, routeServiceArgs.ForwardedURL)
 
-		// if Content-Type not in response, nil out to suppress Go's auto-detect
-		if _, ok := rsp.Header["Content-Type"]; !ok {
-			responseWriter.Header()["Content-Type"] = nil
-		}
-	}
+// 		target.Host = routeServiceArgs.ParsedUrl.Host
+// 		target.URL = routeServiceArgs.ParsedUrl
+// 	} else if hasBeenToRouteService(routeServiceArgs.URLString, sig) {
+// 		// Remove the headers since the backend should not see it
+// 		target.Header.Del(routeservice.RouteServiceSignature)
+// 		target.Header.Del(routeservice.RouteServiceMetadata)
+// 		target.Header.Del(routeservice.RouteServiceForwardedURL)
+// 	}
+// }
 
-//	roundTripper := round_tripper.NewProxyRoundTripper(backend,
-//		dropsonde.InstrumentedRoundTripper(p.transport), iter, handler.Logger(), after)
+// func setupProxyRequest(source *http.Request, target *http.Request, forceForwardedProtoHttps bool) {
+// 	if forceForwardedProtoHttps {
+// 		target.Header.Set("X-Forwarded-Proto", "https")
+// 	} else if source.Header.Get("X-Forwarded-Proto") == "" {
+// 		scheme := "http"
+// 		if source.TLS != nil {
+// 			scheme = "https"
+// 		}
+// 		target.Header.Set("X-Forwarded-Proto", scheme)
+// 	}
 
-//	newReverseProxy(roundTripper, request, routeServiceArgs, p.routeServiceConfig, p.forceForwardedProtoHttps).ServeHTTP(proxyWriter, request)
-}
+// 	target.URL.Scheme = "http"
+// 	target.URL.Host = source.Host
+// 	target.URL.Opaque = source.RequestURI
+// 	target.URL.RawQuery = ""
 
-func handleRouteServiceIntegration(
-	target *http.Request,
-	routeServiceArgs routeservice.RouteServiceRequest,
-	routeServiceConfig *routeservice.RouteServiceConfig,
-) {
-	sig := target.Header.Get(routeservice.RouteServiceSignature)
-	if forwardingToRouteService(routeServiceArgs.URLString, sig) {
-		// An endpoint has a route service and this request did not come from the service
-		target.Header.Set(routeservice.RouteServiceSignature, routeServiceArgs.Signature)
-		target.Header.Set(routeservice.RouteServiceMetadata, routeServiceArgs.Metadata)
-		target.Header.Set(routeservice.RouteServiceForwardedURL, routeServiceArgs.ForwardedURL)
-
-		target.Host = routeServiceArgs.ParsedUrl.Host
-		target.URL = routeServiceArgs.ParsedUrl
-	} else if hasBeenToRouteService(routeServiceArgs.URLString, sig) {
-		// Remove the headers since the backend should not see it
-		target.Header.Del(routeservice.RouteServiceSignature)
-		target.Header.Del(routeservice.RouteServiceMetadata)
-		target.Header.Del(routeservice.RouteServiceForwardedURL)
-	}
-}
-
-func setupProxyRequest(source *http.Request, target *http.Request, forceForwardedProtoHttps bool) {
-	if forceForwardedProtoHttps {
-		target.Header.Set("X-Forwarded-Proto", "https")
-	} else if source.Header.Get("X-Forwarded-Proto") == "" {
-		scheme := "http"
-		if source.TLS != nil {
-			scheme = "https"
-		}
-		target.Header.Set("X-Forwarded-Proto", scheme)
-	}
-
-	target.URL.Scheme = "http"
-	target.URL.Host = source.Host
-	target.URL.Opaque = source.RequestURI
-	target.URL.RawQuery = ""
-
-	handler.SetRequestXRequestStart(source)
-	target.Header.Del(router_http.CfAppInstance)
-}
+// 	handler.SetRequestXRequestStart(source)
+// 	target.Header.Del(router_http.CfAppInstance)
+// }
 
 type wrappedIterator struct {
 	nested    route.EndpointIterator
@@ -355,47 +336,47 @@ func (i *wrappedIterator) PostRequest(e *route.Endpoint) {
 	i.nested.PostRequest(e)
 }
 
-func setupStickySession(responseWriter http.ResponseWriter, response *http.Response,
-	endpoint *route.Endpoint,
-	originalEndpointId string,
-	secureCookies bool,
-	path string) {
-	secure := false
-	maxAge := 0
+// func setupStickySession(responseWriter http.ResponseWriter, response *http.Response,
+// 	endpoint *route.Endpoint,
+// 	originalEndpointId string,
+// 	secureCookies bool,
+// 	path string) {
+// 	secure := false
+// 	maxAge := 0
 
-	// did the endpoint change?
-	sticky := originalEndpointId != "" && originalEndpointId != endpoint.PrivateInstanceId
+// 	// did the endpoint change?
+// 	sticky := originalEndpointId != "" && originalEndpointId != endpoint.PrivateInstanceId
 
-	for _, v := range response.Cookies() {
-		if v.Name == StickyCookieKey {
-			sticky = true
-			if v.MaxAge < 0 {
-				maxAge = v.MaxAge
-			}
-			secure = v.Secure
-			break
-		}
-	}
+// 	for _, v := range response.Cookies() {
+// 		if v.Name == StickyCookieKey {
+// 			sticky = true
+// 			if v.MaxAge < 0 {
+// 				maxAge = v.MaxAge
+// 			}
+// 			secure = v.Secure
+// 			break
+// 		}
+// 	}
 
-	if sticky {
-		// right now secure attribute would as equal to the JSESSION ID cookie (if present),
-		// but override if set to true in config
-		if secureCookies {
-			secure = true
-		}
+// 	if sticky {
+// 		// right now secure attribute would as equal to the JSESSION ID cookie (if present),
+// 		// but override if set to true in config
+// 		if secureCookies {
+// 			secure = true
+// 		}
 
-		cookie := &http.Cookie{
-			Name:     VcapCookieId,
-			Value:    endpoint.PrivateInstanceId,
-			Path:     path,
-			MaxAge:   maxAge,
-			HttpOnly: true,
-			Secure:   secure,
-		}
+// 		cookie := &http.Cookie{
+// 			Name:     VcapCookieId,
+// 			Value:    endpoint.PrivateInstanceId,
+// 			Path:     path,
+// 			MaxAge:   maxAge,
+// 			HttpOnly: true,
+// 			Secure:   secure,
+// 		}
 
-		http.SetCookie(responseWriter, cookie)
-	}
-}
+// 		http.SetCookie(responseWriter, cookie)
+// 	}
+// }
 
 func forwardingToRouteService(rsUrl, sigHeader string) bool {
 	return sigHeader == "" && rsUrl != ""
@@ -405,18 +386,14 @@ func hasBeenToRouteService(rsUrl, sigHeader string) bool {
 	return sigHeader != "" && rsUrl != ""
 }
 
-func isProtocolSupported(request *http.Request) bool {
-	return request.ProtoMajor == 1 && (request.ProtoMinor == 0 || request.ProtoMinor == 1)
-}
+// func isWebSocketUpgrade(request *http.Request) bool {
+// 	// websocket should be case insensitive per RFC6455 4.2.1
+// 	return strings.ToLower(upgradeHeader(request)) == "websocket"
+// }
 
-func isWebSocketUpgrade(request *http.Request) bool {
-	// websocket should be case insensitive per RFC6455 4.2.1
-	return strings.ToLower(upgradeHeader(request)) == "websocket"
-}
-
-func isTcpUpgrade(request *http.Request) bool {
-	return upgradeHeader(request) == "tcp"
-}
+// func isTcpUpgrade(request *http.Request) bool {
+// 	return upgradeHeader(request) == "tcp"
+// }
 
 func upgradeHeader(request *http.Request) string {
 	// handle multiple Connection field-values, either in a comma-separated string or multiple field-headers

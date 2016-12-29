@@ -12,6 +12,14 @@ import (
 
 type AfterRoundTrip func(rsp *http.Response, endpoint *route.Endpoint, err error)
 
+func NewRouteServiceRoundTripper(transport http.RoundTripper,
+	logger lager.Logger, afterRoundTrip AfterRoundTrip) *RouteServiceRoundTripper {
+	return &RouteServiceRoundTripper{
+		transport: transport,
+		logger:    logger,
+		after:     afterRoundTrip,
+	}
+}
 func NewProxyRoundTripper(backend bool, transport http.RoundTripper, endpointIterator route.EndpointIterator,
 	logger lager.Logger, afterRoundTrip AfterRoundTrip) http.RoundTripper {
 	if backend {
