@@ -158,8 +158,9 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 
 	timedOut := true
 	var endpoint *route.Endpoint
+	var err error
 	for retry := 0; retry < maxRetries; retry++ {
-		endpoint, err := selectEndpoint(iter)
+		endpoint, err = selectEndpoint(iter)
 
 		if err != nil {
 			break
@@ -201,7 +202,7 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	})
 	rw.WriteHeader(backendResp.StatusCode())
 
-	err := backendResp.BodyWriteTo(rw)
+	err = backendResp.BodyWriteTo(rw)
 	if err != nil {
 		// TODO: How do we handle this case?
 		fmt.Printf("Error writing response: %s\n", err.Error())
