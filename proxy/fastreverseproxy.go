@@ -152,36 +152,37 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	}
 
 	//backend := true
-
+	//route service stuff
 	// routeServiceUrl := pool.RouteServiceUrl()
 	// router_service.ForwardRouter(routerServiceUrl, f.routeServiceConfig)
-
-	endpoints := pool.Endpoints("", "")
 
 	timedOut := true
 	var endpoint *route.Endpoint
 	for retry := 0; retry < maxRetries; retry++ {
-		endpoint = endpoints.Next()
-		if endpoint == nil {
-			rw.WriteHeader(http.StatusBadGateway)
-			fmt.Printf("http: no endpoints available for %s\n", uri)
-			// TODO: Message for no endpoints available
-			return
+		endpoint, err := selectEndpoint(iter)
+
+		if err != nil {
+			break
 		}
-		// TODO: Log endpoint?
 
-		backendReq.SetHost(endpoint.CanonicalAddr())
+		setupRequest(backendReq, endpoint)
 
-		err := fasthttp.Do(backendReq, backendResp)
+		iter.PreRequest(endpoint)
+		err = fasthttp.Do(backendReq, backendResp)
 		if err == nil {
 			timedOut = false
 			break
 		}
-		if err != fasthttp.ErrDialTimeout {
-			rw.WriteHeader(http.StatusBadGateway)
-			rw.Write([]byte(fmt.Sprintf("Error connecting to backend: %s", err.Error())))
-			return
+		iter.PostRequest(endpoint)
+		if err == nil || !retryableError(err) {
+			break
 		}
+
+		// if err != fasthttp.ErrDialTimeout {
+		// 	rw.WriteHeader(http.StatusBadGateway)
+		// 	rw.Write([]byte(fmt.Sprintf("Error connecting to backend: %s", err.Error())))
+		// 	return
+		// }
 		// TODO: Log error timed out connecting to backends
 	}
 
@@ -237,6 +238,13 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	}
 }
 
+func retryableError(err error) bool {
+	if err == fasthttp.ErrDialTimeout {
+		return true
+	}
+	return false
+}
+
 func setupStickySession(respHeader fasthttp.ResponseHeader,
 	endpoint *route.Endpoint,
 	originalEndpointId string,
@@ -288,6 +296,11 @@ func copyRequest(req *http.Request, newreq *fasthttp.Request) error {
 
 	return newreq.Read(bufio.NewReader(buf))
 }
+func setupRequest(request *fasthttp.Request, endpoint *route.Endpoint) {
+	request.Header.SetHost(endpoint.CanonicalAddr())
+	request.Header.Set("X-CF-ApplicationID", endpoint.ApplicationId)
+	//handler.SetRequestXCfInstanceId(request, endpoint)
+}
 
 func hostWithoutPort(req *http.Request) string {
 	host := req.Host
@@ -299,6 +312,16 @@ func hostWithoutPort(req *http.Request) string {
 	}
 
 	return host
+}
+
+func selectEndpoint(iter *wrappedIterator) (*route.Endpoint, error) {
+	endpoint := iter.Next()
+	if endpoint == nil {
+		return nil, handler.NoEndpointsAvailable
+	}
+
+	//	rt.logger = rt.logger.WithData(lager.Data{"route-endpoint": endpoint.ToLogData()})
+	return endpoint, nil
 }
 
 func isProtocolSupported(request *http.Request) bool {
