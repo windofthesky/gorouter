@@ -989,7 +989,8 @@ func getSessionAndAppPort(url string, rPort uint16) (*http.Cookie, *http.Cookie,
 			vcapCookie = cookie
 		}
 	}
-
+	Expect(sessionCookie).ToNot(BeNil())
+	Expect(vcapCookie).ToNot(BeNil())
 	return sessionCookie, vcapCookie, string(port)
 }
 

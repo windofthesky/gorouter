@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"code.cloudfoundry.org/gorouter/access_log/schema"
 	router_http "code.cloudfoundry.org/gorouter/common/http"
@@ -86,12 +87,16 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	proxyWriter := rw.(utils.ProxyResponseWriter)
 	alr := proxyWriter.Context().Value("AccessLogRecord")
 	if alr == nil {
-		fmt.Printf("AccessLogRecord not set on context", errors.New("failed-to-access-LogRecord"))
+		fmt.Println("AccessLogRecord not set on context", errors.New("failed-to-access-LogRecord"))
 	}
 	accessLog := alr.(*schema.AccessLogRecord)
 	handler := handler.NewRequestHandler(req, proxyWriter, f.reporter, accessLog, f.logger)
 
-	copyRequest(req, backendReq)
+	err := copyRequest(req, backendReq)
+	if err != nil {
+		fmt.Fprintf(rw, "Error parsing request: %s", err.Error())
+		return
+	}
 
 	for _, h := range HopHeaders {
 		backendReq.Header.Del(h)
@@ -119,6 +124,16 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 		return
 	}
 
+	if f.forceForwardedProtoHttps {
+		backendReq.Header.Set("X-Forwarded-Proto", "https")
+	} else if req.Header.Get("X-Forwarded-Proto") == "" {
+		scheme := "http"
+		if req.TLS != nil {
+			scheme = "https"
+		}
+		backendReq.Header.Set("X-Forwarded-Proto", scheme)
+	}
+
 	requestPath := req.URL.EscapedPath()
 	uri := route.Uri(hostWithoutPort(req) + requestPath)
 	pool := f.registry.Lookup(uri)
@@ -130,7 +145,6 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 
 	stickyEndpointId := getStickySession(req)
 	iter := &wrappedIterator{
-		//"round-robin": defaultLoadBalance
 		nested: pool.Endpoints(f.defaultLoadBalance, stickyEndpointId),
 
 		afterNext: func(endpoint *route.Endpoint) {
@@ -156,9 +170,7 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	// routeServiceUrl := pool.RouteServiceUrl()
 	// router_service.ForwardRouter(routerServiceUrl, f.routeServiceConfig)
 
-	timedOut := true
 	var endpoint *route.Endpoint
-	var err error
 	for retry := 0; retry < maxRetries; retry++ {
 		endpoint, err = selectEndpoint(iter)
 
@@ -169,51 +181,37 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 		setupRequest(backendReq, endpoint)
 
 		iter.PreRequest(endpoint)
-		err = fasthttp.Do(backendReq, backendResp)
-		if err == nil {
-			timedOut = false
-			break
+
+		// fmt.Println("** REM")
+		// fmt.Println(req)
+		// fmt.Println(backendReq.String())
+
+		hc := fasthttp.HostClient{
+			Addr: endpoint.CanonicalAddr(),
 		}
+		// timeout should be 15min / def timeout
+		fmt.Println("Performing request...")
+		err = hc.DoTimeout(backendReq, backendResp, 30*time.Second)
+		fmt.Println("Finished performing request...")
+		// fmt.Println("** REM request completed")
+
 		iter.PostRequest(endpoint)
+		if err != nil {
+			fmt.Println("Error:", err.Error())
+		}
 		if err == nil || !retryableError(err) {
 			break
 		}
 
-		// if err != fasthttp.ErrDialTimeout {
-		// 	rw.WriteHeader(http.StatusBadGateway)
-		// 	rw.Write([]byte(fmt.Sprintf("Error connecting to backend: %s", err.Error())))
-		// 	return
-		// }
 		// TODO: Log error timed out connecting to backends
 	}
 
-	if timedOut {
-		rw.WriteHeader(http.StatusBadGateway)
-		rw.Write([]byte("Exceeded max retries: Timed out connecting to backends."))
-		return
-	}
-
-	// TODO: add trailers?
-	for _, h := range HopHeaders {
-		backendResp.Header.Del(h)
-	}
-	backendResp.Header.VisitAll(func(key []byte, value []byte) {
-		rw.Header().Add(string(key), string(value))
-	})
-	rw.WriteHeader(backendResp.StatusCode())
-
-	err = backendResp.BodyWriteTo(rw)
 	if err != nil {
-		// TODO: How do we handle this case?
-		fmt.Printf("Error writing response: %s\n", err.Error())
+		//		rw.WriteHeader(http.StatusBadGateway)
+		handler.HandleBadGateway(err, req)
+		//		rw.Write([]byte("Exceeded max retries: Timed out connecting to backends."))
 		return
 	}
-
-	buf := new(bytes.Buffer)
-	backendResp.WriteTo(buf)
-	// fmt.Println(buf.String())
-
-	next(rw, req)
 
 	//		accessLog.FirstByteAt = time.Now()
 	if backendResp != nil {
@@ -221,6 +219,7 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	}
 
 	if f.traceKey != "" && endpoint != nil && req.Header.Get(router_http.VcapTraceHeader) == f.traceKey {
+		fmt.Println("configured trace keys")
 		router_http.SetTraceHeaders(rw, f.ip, endpoint.CanonicalAddr())
 	}
 
@@ -229,31 +228,62 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	//	f.reporter.CaptureRoutingResponse(endpoint, backendResp, accessLog.StartedAt, latency)
 
 	if endpoint.PrivateInstanceId != "" {
-		setupStickySession(backendResp.Header, endpoint,
+		setupStickySession(rw, backendResp.Header, endpoint,
 			stickyEndpointId, f.secureCookies, pool.ContextPath())
 	}
 
-	// if Content-Type not in response, nil out to suppress Go's auto-detect
-	if ok := backendResp.Header.Peek("Content-Type"); len(ok) == 0 {
-		rw.Header().Del("Content-Type")
+	// TODO: add trailers?
+	for _, h := range HopHeaders {
+		backendResp.Header.Del(h)
 	}
+
+	backendResp.Header.VisitAll(func(key []byte, value []byte) {
+		rw.Header().Add(string(key), string(value))
+	})
+	// if Content-Type not in response, nil out to suppress Go's auto-detect
+	if contentType := backendResp.Header.Peek("Content-Type"); len(contentType) == 0 {
+		//fmt.Println("Found header", string(ok))
+		rw.Header()["Content-Type"] = nil
+	}
+	rw.WriteHeader(backendResp.StatusCode())
+
+	if backendResp.IsBodyStream() {
+		fmt.Println("IS BODY STREAM *********************")
+	}
+	fmt.Println("GOT BODY", string(backendResp.Body()))
+	if fl, ok := rw.(http.Flusher); ok {
+		fl.Flush()
+	}
+
+	err = backendResp.BodyWriteTo(rw)
+	if err != nil {
+		// TODO: How do we handle this case?
+		fmt.Printf("Error writing response: %s\n", err.Error())
+		return
+	}
+	//	fmt.Println("Finished req")
+
+	next(rw, req)
+
 }
 
 func retryableError(err error) bool {
 	if err == fasthttp.ErrDialTimeout {
 		return true
 	}
+	if ne, netErr := err.(*net.OpError); netErr && ne.Op == "dial" {
+		return true
+	}
 	return false
 }
 
-func setupStickySession(respHeader fasthttp.ResponseHeader,
+func setupStickySession(responseWriter http.ResponseWriter, backendRespHeaders fasthttp.ResponseHeader,
 	endpoint *route.Endpoint,
 	originalEndpointId string,
 	secureCookies bool,
 	path string) {
-	//	secure := false
-	//	maxAge := 0
-	//time.Date()
+	secure := false
+	maxAge := 0
 
 	// did the endpoint change?
 	sticky := originalEndpointId != "" && originalEndpointId != endpoint.PrivateInstanceId
@@ -261,6 +291,7 @@ func setupStickySession(respHeader fasthttp.ResponseHeader,
 	cookieFunc := func(key, value []byte) {
 		if string(key) == StickyCookieKey {
 			sticky = true
+			// TODO: parse resp cookie to get the max age since fhttp does not support this feature
 			//	if v.MaxAge < 0 {
 			//			maxAge = v.MaxAge
 			//		}
@@ -269,38 +300,59 @@ func setupStickySession(respHeader fasthttp.ResponseHeader,
 		}
 	}
 
-	respHeader.VisitAllCookie(cookieFunc)
+	backendRespHeaders.VisitAllCookie(cookieFunc)
 	if sticky {
 		// right now secure attribute would as equal to the JSESSION ID cookie (if present),
 		// but override if set to true in config
-		fcookie := fasthttp.AcquireCookie()
-		defer fasthttp.ReleaseCookie(fcookie)
-
 		if secureCookies {
-			fcookie.Secure()
-			//	secure = true
+			secure = true
 		}
-		fcookie.SetKey(VcapCookieId)
-		fcookie.SetValue(endpoint.PrivateInstanceId)
-		fcookie.SetPath(path)
-		fcookie.SetHTTPOnly(true)
-		//	fcookie.SetExpire(time.Time(maxAge))
-		respHeader.SetCookie(fcookie)
+
+		cookie := &http.Cookie{
+			Name:     VcapCookieId,
+			Value:    endpoint.PrivateInstanceId,
+			Path:     path,
+			MaxAge:   maxAge,
+			HttpOnly: true,
+			Secure:   secure,
+		}
+
+		http.SetCookie(responseWriter, cookie)
 	}
 }
-func copyRequest(req *http.Request, newreq *fasthttp.Request) error {
+
+func copyRequest(req *http.Request, newReq *fasthttp.Request) error {
 	buf := new(bytes.Buffer)
 	err := req.Write(buf)
 	if err != nil {
 		return err
 	}
 
-	return newreq.Read(bufio.NewReader(buf))
+	fmt.Println("copying req", buf.String())
+
+	err = newReq.Read(bufio.NewReader(buf))
+	if err != nil {
+		return err
+	}
+	if req.RequestURI != "" {
+		newReq.SetRequestURI(req.RequestURI)
+	}
+
+	newBuf := new(bytes.Buffer)
+	writer := bufio.NewWriter(newBuf)
+	newReq.Write(writer)
+	writer.Flush()
+
+	fmt.Println("copied req", newBuf.String())
+	return nil
 }
+
 func setupRequest(request *fasthttp.Request, endpoint *route.Endpoint) {
-	request.Header.SetHost(endpoint.CanonicalAddr())
-	request.Header.Set("X-CF-ApplicationID", endpoint.ApplicationId)
+	request.Header.Set("X-CF-ApplicationID", endpoint.ApplicationId) // why do we need this ?
 	//handler.SetRequestXCfInstanceId(request, endpoint)
+	// if ok := request.Header.Peek(http.CanonicalHeaderKey("X-Request-Start")); string(ok) != "" {
+	// 	request.Header.Set("X-Request-Start", strconv.FormatInt(time.Now().UnixNano()/1e6, 10))
+	// }
 }
 
 func hostWithoutPort(req *http.Request) string {

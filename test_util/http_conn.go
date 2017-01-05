@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"strings"
 
+	"github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
 	"bufio"
@@ -29,6 +30,7 @@ func NewHttpConn(x net.Conn) *HttpConn {
 }
 
 func (x *HttpConn) ReadRequest() (*http.Request, string) {
+	defer ginkgo.GinkgoRecover()
 	req, err := http.ReadRequest(x.Reader)
 	Expect(err).NotTo(HaveOccurred())
 	defer req.Body.Close()
@@ -40,16 +42,17 @@ func (x *HttpConn) ReadRequest() (*http.Request, string) {
 }
 
 func (x *HttpConn) WriteRequest(req *http.Request) {
+	defer ginkgo.GinkgoRecover()
 	err := req.Write(x.Writer)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 	x.Writer.Flush()
 }
 
 func (x *HttpConn) ReadResponse() (*http.Response, string) {
+	defer ginkgo.GinkgoRecover()
 	resp, err := http.ReadResponse(x.Reader, &http.Request{})
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 	defer resp.Body.Close()
-
 	b, err := ioutil.ReadAll(resp.Body)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 
@@ -66,12 +69,14 @@ func NewResponse(status int) *http.Response {
 }
 
 func (x *HttpConn) WriteResponse(resp *http.Response) {
+	defer ginkgo.GinkgoRecover()
 	err := resp.Write(x.Writer)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 	x.Writer.Flush()
 }
 
 func (x *HttpConn) CheckLine(expected string) {
+	defer ginkgo.GinkgoRecover()
 	l, err := x.Reader.ReadString('\n')
 	Expect(err).NotTo(HaveOccurred())
 	Expect(strings.TrimRight(l, "\r\n")).To(Equal(expected))
