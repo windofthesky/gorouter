@@ -6,6 +6,7 @@ import (
 	"code.cloudfoundry.org/gorouter/metrics/reporter"
 	"code.cloudfoundry.org/gorouter/route"
 	dropsondeMetrics "github.com/cloudfoundry/dropsonde/metrics"
+	"github.com/valyala/fasthttp"
 
 	"fmt"
 	"strings"
@@ -39,7 +40,7 @@ func (m *MetricsReporter) CaptureRoutingRequest(b *route.Endpoint, req *http.Req
 	}
 }
 
-func (m *MetricsReporter) CaptureRoutingResponse(b *route.Endpoint, res *http.Response, t time.Time, d time.Duration) {
+func (m *MetricsReporter) CaptureRoutingResponse(b *route.Endpoint, res *fasthttp.Response, t time.Time, d time.Duration) {
 	dropsondeMetrics.BatchIncrementCounter(getResponseCounterName(res))
 	dropsondeMetrics.BatchIncrementCounter("responses")
 
@@ -67,11 +68,11 @@ func (c *MetricsReporter) CaptureRegistryMessage(msg reporter.ComponentTagged) {
 	dropsondeMetrics.IncrementCounter("registry_message." + msg.Component())
 }
 
-func getResponseCounterName(res *http.Response) string {
+func getResponseCounterName(res *fasthttp.Response) string {
 	var statusCode int
 
 	if res != nil {
-		statusCode = res.StatusCode / 100
+		statusCode = res.StatusCode() / 100
 	}
 	if statusCode >= 2 && statusCode <= 5 {
 		return fmt.Sprintf("responses.%dxx", statusCode)

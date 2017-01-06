@@ -1161,8 +1161,8 @@ var _ = Describe("Proxy", func() {
 		ln := registerHandler(r, "retries", func(conn *test_util.HttpConn) {
 			defer GinkgoRecover()
 			req, _ := conn.ReadRequest()
-			Expect(req.Method).To(Equal("GET"))
-			//		Expect(req.Host).To(Equal("retries"))
+			Expect(req.Method).To(Equal("POST"))
+			Expect(req.Host).To(Equal("retries"))
 			resp := test_util.NewResponse(http.StatusOK)
 			conn.WriteResponse(resp)
 			conn.Close()
@@ -1179,12 +1179,15 @@ var _ = Describe("Proxy", func() {
 
 			conn := dialProxy(proxyServer)
 
-			req := test_util.NewRequest("GET", "retries", "/", ioutil.NopCloser(body))
-			conn.WriteRequest(req)
-			resp, respBody := conn.ReadResponse()
+			bodyCloser := ioutil.NopCloser(body)
+			req := test_util.NewRequest("POST", "retries", "/", bodyCloser)
+			// req := test_util.NewRequest("GET", "retries", "/", body)
 
-			fmt.Println(respBody)
+			conn.WriteRequest(req)
+			resp, _ := conn.ReadResponse()
+
 			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+			// conn.Close()
 		}
 	})
 
@@ -1192,6 +1195,8 @@ var _ = Describe("Proxy", func() {
 		It("Logs a request", func() {
 			ln := registerHandler(r, "test", func(conn *test_util.HttpConn) {
 				defer GinkgoRecover()
+
+				fmt.Println("it got here 3")
 				req, body := conn.ReadRequest()
 				Expect(req.Method).To(Equal("POST"))
 				Expect(req.URL.Path).To(Equal("/"))
@@ -1205,6 +1210,7 @@ var _ = Describe("Proxy", func() {
 				out.WriteString("DEFG")
 				rsp.Body = ioutil.NopCloser(out)
 				conn.WriteResponse(rsp)
+				conn.Close()
 			})
 			defer ln.Close()
 
@@ -1212,7 +1218,8 @@ var _ = Describe("Proxy", func() {
 
 			body := &bytes.Buffer{}
 			body.WriteString("ABCD")
-			req := test_util.NewRequest("POST", "test", "/", ioutil.NopCloser(body))
+			req := test_util.NewRequest("POST", "test", "/", body)
+			// req := test_util.NewRequest("POST", "test", "/", ioutil.NopCloser(body))
 			conn.WriteRequest(req)
 
 			resp, _ := conn.ReadResponse()
@@ -1296,9 +1303,11 @@ var _ = Describe("Proxy", func() {
 				}).Should(Equal("Hellow World: App2"))
 			})
 
-			It("returns a 404 if it cannot find the specified instance", func() {
+			XIt("returns a 404 if it cannot find the specified instance", func(done Done) {
+				defer close(done)
 				ln := registerHandlerWithAppId(r, "app.vcap.me", "", func(conn *test_util.HttpConn) {
 					defer GinkgoRecover()
+
 					Fail("App should not have received request")
 				}, "", "app-1-id")
 				defer ln.Close()
@@ -1312,7 +1321,7 @@ var _ = Describe("Proxy", func() {
 				resp, _ := conn.ReadResponse()
 				Expect(resp.StatusCode).To(Equal(http.StatusNotFound))
 				Expect(resp.Header.Get("X-Cf-RouterError")).To(Equal("unknown_route"))
-			})
+			}, 1)
 		})
 
 		Context("when the request is a TCP Upgrade", func() {

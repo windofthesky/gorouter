@@ -11,6 +11,7 @@ import (
 	"code.cloudfoundry.org/gorouter/route"
 	"code.cloudfoundry.org/gorouter/stats"
 	metrics "github.com/rcrowley/go-metrics"
+	"github.com/valyala/fasthttp"
 )
 
 type topAppsEntry struct {
@@ -110,10 +111,10 @@ func (x *HttpMetric) CaptureRequest() {
 	x.Rate.Mark(1)
 }
 
-func (x *HttpMetric) CaptureResponse(response *http.Response, duration time.Duration) {
+func (x *HttpMetric) CaptureResponse(response *fasthttp.Response, duration time.Duration) {
 	var statusCode int
 	if response != nil {
-		statusCode = response.StatusCode / 100
+		statusCode = response.StatusCode() / 100
 	}
 
 	switch statusCode {
@@ -153,7 +154,7 @@ func (x TaggedHttpMetric) CaptureRequest(t string) {
 	x.httpMetric(t).CaptureRequest()
 }
 
-func (x TaggedHttpMetric) CaptureResponse(t string, y *http.Response, z time.Duration) {
+func (x TaggedHttpMetric) CaptureResponse(t string, y *fasthttp.Response, z time.Duration) {
 	x.httpMetric(t).CaptureResponse(y, z)
 }
 
@@ -165,7 +166,7 @@ type Varz interface {
 	CaptureBadRequest(req *http.Request)
 	CaptureBadGateway(req *http.Request)
 	CaptureRoutingRequest(b *route.Endpoint, req *http.Request)
-	CaptureRoutingResponse(b *route.Endpoint, res *http.Response, startedAt time.Time, d time.Duration)
+	CaptureRoutingResponse(b *route.Endpoint, res *fasthttp.Response, startedAt time.Time, d time.Duration)
 }
 
 type RealVarz struct {
@@ -262,7 +263,7 @@ func (x *RealVarz) CaptureRoutingRequest(b *route.Endpoint, req *http.Request) {
 	x.Unlock()
 }
 
-func (x *RealVarz) CaptureRoutingResponse(endpoint *route.Endpoint, response *http.Response, startedAt time.Time, duration time.Duration) {
+func (x *RealVarz) CaptureRoutingResponse(endpoint *route.Endpoint, response *fasthttp.Response, startedAt time.Time, duration time.Duration) {
 	x.Lock()
 
 	var tags string

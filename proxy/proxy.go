@@ -127,7 +127,7 @@ func NewProxy(args ProxyArgs) Proxy {
 		fastProxy: NewFastReverseProxy(args.Registry, args.Logger,
 			args.Reporter, routeServiceConfig,
 			args.ForceForwardedProtoHttps, args.TraceKey, args.DefaultLoadBalance,
-			args.Ip, args.SecureCookies),
+			args.Ip, args.SecureCookies, args.TLSConfig, args.EndpointTimeout),
 	}
 
 	n := negroni.New()

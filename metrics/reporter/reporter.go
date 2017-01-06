@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/valyala/fasthttp"
+
 	"code.cloudfoundry.org/gorouter/route"
 )
 
@@ -12,7 +14,7 @@ type ProxyReporter interface {
 	CaptureBadRequest(req *http.Request)
 	CaptureBadGateway(req *http.Request)
 	CaptureRoutingRequest(b *route.Endpoint, req *http.Request)
-	CaptureRoutingResponse(b *route.Endpoint, res *http.Response, t time.Time, d time.Duration)
+	CaptureRoutingResponse(b *route.Endpoint, res *fasthttp.Response, t time.Time, d time.Duration)
 }
 
 type ComponentTagged interface {

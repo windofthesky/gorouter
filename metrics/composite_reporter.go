@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/valyala/fasthttp"
+
 	"code.cloudfoundry.org/gorouter/metrics/reporter"
 	"code.cloudfoundry.org/gorouter/route"
 )
@@ -35,7 +37,7 @@ func (c *CompositeReporter) CaptureRoutingRequest(b *route.Endpoint, req *http.R
 	c.second.CaptureRoutingRequest(b, req)
 }
 
-func (c *CompositeReporter) CaptureRoutingResponse(b *route.Endpoint, res *http.Response, t time.Time, d time.Duration) {
+func (c *CompositeReporter) CaptureRoutingResponse(b *route.Endpoint, res *fasthttp.Response, t time.Time, d time.Duration) {
 	c.first.CaptureRoutingResponse(b, res, t, d)
 	c.second.CaptureRoutingResponse(b, res, t, d)
 }

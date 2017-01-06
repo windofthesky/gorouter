@@ -17,7 +17,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = XDescribe("Route Services", func() {
+var _ = Describe("Route Services", func() {
 	var (
 		routeServiceListener net.Listener
 		routeServiceHandler  http.Handler
@@ -189,7 +189,8 @@ var _ = XDescribe("Route Services", func() {
 				})
 			})
 
-			It("routes to the backend instance and strips headers", func() {
+			It("routes to the backend instance and strips headers", func(done Done) {
+				defer close(done)
 				ln := registerHandlerWithRouteService(r, "my_host.com", "https://"+routeServiceListener.Addr().String(), func(conn *test_util.HttpConn) {
 					req, _ := conn.ReadRequest()
 					Expect(req.Header.Get(routeservice.RouteServiceSignature)).To(Equal(""))
@@ -203,6 +204,7 @@ var _ = XDescribe("Route Services", func() {
 						Body:       ioutil.NopCloser(out),
 					}
 					conn.WriteResponse(res)
+					conn.Close()
 				})
 				defer ln.Close()
 
@@ -217,7 +219,7 @@ var _ = XDescribe("Route Services", func() {
 				res, body := conn.ReadResponse()
 				Expect(body).To(ContainSubstring("backend instance"))
 				Expect(res.StatusCode).To(Equal(http.StatusOK))
-			})
+			}, 5)
 
 			Context("when request has Host header with a port", func() {
 				It("routes to backend instance and disregards port in Host header", func() {
@@ -230,6 +232,7 @@ var _ = XDescribe("Route Services", func() {
 							Body:       ioutil.NopCloser(out),
 						}
 						conn.WriteResponse(res)
+						conn.Close()
 					})
 					defer ln.Close()
 
@@ -261,6 +264,7 @@ var _ = XDescribe("Route Services", func() {
 							Body:       ioutil.NopCloser(out),
 						}
 						conn.WriteResponse(res)
+						conn.Close()
 					})
 					defer ln.Close()
 
@@ -290,7 +294,7 @@ var _ = XDescribe("Route Services", func() {
 				req.Header.Set(routeservice.RouteServiceMetadata, metadataHeader)
 				conn.WriteRequest(req)
 				resp, _ := conn.ReadResponse()
-
+				conn.Close()
 				Expect(resp.StatusCode).To(Equal(http.StatusBadGateway))
 			})
 		})
@@ -309,6 +313,7 @@ var _ = XDescribe("Route Services", func() {
 			conn.WriteRequest(req)
 
 			res, body := conn.ReadResponse()
+			conn.Close()
 			Expect(res.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(body).To(ContainSubstring("Failed to validate Route Service Signature"))
 		})
@@ -333,6 +338,7 @@ var _ = XDescribe("Route Services", func() {
 			conn.WriteRequest(req)
 
 			res, body := conn.ReadResponse()
+			conn.Close()
 			Expect(res.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(body).To(ContainSubstring("Failed to validate Route Service Signature"))
 		})
@@ -353,6 +359,7 @@ var _ = XDescribe("Route Services", func() {
 			conn.WriteRequest(req)
 
 			res, body := conn.ReadResponse()
+			conn.Close()
 			Expect(res.StatusCode).To(Equal(http.StatusBadRequest))
 			Expect(body).To(ContainSubstring("Failed to validate Route Service Signature"))
 		})
@@ -380,6 +387,7 @@ var _ = XDescribe("Route Services", func() {
 				conn.WriteRequest(req)
 
 				res, body := conn.ReadResponse()
+				conn.Close()
 				Expect(res.StatusCode).To(Equal(http.StatusBadRequest))
 				Expect(body).To(ContainSubstring("Failed to validate Route Service Signature"))
 			})
@@ -403,6 +411,7 @@ var _ = XDescribe("Route Services", func() {
 						Body:       ioutil.NopCloser(out),
 					}
 					conn.WriteResponse(res)
+					conn.Close()
 				})
 
 				defer ln.Close()

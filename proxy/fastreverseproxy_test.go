@@ -2,13 +2,13 @@ package proxy_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"mime/multipart"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"strconv"
 	"strings"
 	"time"
@@ -31,37 +31,34 @@ import (
 	"github.com/urfave/negroni"
 )
 
-var _ = FDescribe("FastReverseProxy", func() {
+var _ = Describe("FastReverseProxy", func() {
 	var (
 		handler            negroni.Handler
 		testServer         *ghttp.Server
 		testServerRoute    string
 		testServerEndpoint *route.Endpoint
 		nextCalled         bool
-		resp               *httptest.ResponseRecorder
-		proxyWriter        utils.ProxyResponseWriter
 		reg                *registryfakes.FakeRegistryInterface
 		logger             lager.Logger
+		l                  net.Listener
+		client             *http.Client
 	)
 
 	nextHandler := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		if req.Body != nil {
-			_, err := ioutil.ReadAll(req.Body)
-			Expect(err).NotTo(HaveOccurred())
-		}
-
 		rw.WriteHeader(http.StatusTeapot)
 
 		nextCalled = true
 	})
 
-	BeforeEach(func() {
-		testServer = ghttp.NewServer()
-		resp = httptest.NewRecorder()
-
-		proxyWriter = utils.NewProxyResponseWriter(resp)
+	proxyWriterHandler := negroni.HandlerFunc(func(rw http.ResponseWriter, req *http.Request, next http.HandlerFunc) {
+		proxyWriter := utils.NewProxyResponseWriter(rw)
 		alr := &schema.AccessLogRecord{}
 		proxyWriter.AddToContext("AccessLogRecord", alr)
+		next(proxyWriter, req)
+	})
+
+	BeforeEach(func() {
+		testServer = ghttp.NewServer()
 
 		testServerRoute = "foo.com"
 
@@ -77,18 +74,44 @@ var _ = FDescribe("FastReverseProxy", func() {
 		testServerEndpoint = route.NewEndpoint("foo", host, uint16(port), "", "", nil, -1, "", models.ModificationTag{})
 		_ = pool.Put(testServerEndpoint)
 		reg.LookupStub = func(uri route.Uri) *route.Pool {
-			if uri.String() == testServerRoute {
+			if strings.Contains(uri.String(), testServerRoute) {
 				return pool
 			}
 			return nil
 		}
 
-		handler = proxy.NewFastReverseProxy(reg, logger, new(fakes.FakeProxyReporter), nil, false, "", "", "local", false)
+		handler = proxy.NewFastReverseProxy(reg, logger, new(fakes.FakeProxyReporter), nil, false, "", "", "local", false, nil, 1*time.Minute)
+
+		n := negroni.New()
+		n.Use(proxyWriterHandler)
+		n.Use(handler)
+		n.UseHandlerFunc(nextHandler)
+
+		s := &http.Server{
+			Handler: n,
+		}
+
+		l, err = net.Listen("tcp", ":0")
+		Expect(err).ToNot(HaveOccurred())
+
+		go s.Serve(l)
+
 		nextCalled = false
+
+		hackDial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext(ctx, "tcp", l.Addr().String())
+		}
+
+		transport := &http.Transport{DialContext: hackDial}
+		client = &http.Client{Transport: transport}
 	})
 
 	AfterEach(func() {
 		testServer.Close()
+		l.Close()
 	})
 
 	It("routes the request to the correct backend", func() {
@@ -100,12 +123,17 @@ var _ = FDescribe("FastReverseProxy", func() {
 			),
 		)
 		req := test_util.NewRequest("GET", testServerRoute, "/foo", nil)
-		handler.ServeHTTP(proxyWriter, req, nextHandler)
+
+		resp, err := client.Do(req)
+		Expect(err).ToNot(HaveOccurred())
 
 		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
-		Expect(resp.Code).To(Equal(http.StatusOK))
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
 
-		Expect(resp.Body.String()).To(Equal(testBody))
+		bodyBytes, err := ioutil.ReadAll(resp.Body)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(string(bodyBytes)).To(Equal(testBody))
 		Expect(nextCalled).To(BeTrue())
 	})
 
@@ -120,10 +148,12 @@ var _ = FDescribe("FastReverseProxy", func() {
 			),
 		)
 		req := test_util.NewRequest("GET", testServerRoute, "/", nil)
-		handler.ServeHTTP(proxyWriter, req, nextHandler)
+
+		resp, err := client.Do(req)
+		Expect(err).ToNot(HaveOccurred())
 
 		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
-		Expect(resp.Code).To(Equal(http.StatusOK))
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
 
 		Expect(nextCalled).To(BeTrue())
 	})
@@ -140,8 +170,9 @@ var _ = FDescribe("FastReverseProxy", func() {
 		req := test_util.NewRequest("GET", testServerRoute, "/", nil)
 		req.Header.Add("X-Foo-Header", "foo")
 		req.Header.Add("X-Bar-Header", "bar")
-		handler.ServeHTTP(proxyWriter, req, nextHandler)
+		_, err := client.Do(req)
 
+		Expect(err).ToNot(HaveOccurred())
 		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
 	})
 
@@ -157,28 +188,23 @@ var _ = FDescribe("FastReverseProxy", func() {
 			),
 		)
 		req := test_util.NewRequest("GET", testServerRoute, "/", nil)
-		handler.ServeHTTP(proxyWriter, req, nextHandler)
+		resp, err := client.Do(req)
+		Expect(err).ToNot(HaveOccurred())
 
 		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
-		Expect(resp.Code).To(Equal(http.StatusOK))
-		Expect(resp.Header().Get("X-Foo-Header")).To(Equal("foo"))
-		Expect(resp.Header().Get("X-Bar-Header")).To(Equal("bar"))
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+		Expect(resp.Header.Get("X-Foo-Header")).To(Equal("foo"))
+		Expect(resp.Header.Get("X-Bar-Header")).To(Equal("bar"))
 		Expect(nextCalled).To(BeTrue())
 	})
 
-	FIt("can handle multipart form data", func() {
+	It("can handle multipart form data", func() {
 		expectedBody := []byte(strings.Repeat("Z", 1024))
 		testServer.AppendHandlers(
 			ghttp.CombineHandlers(
 				ghttp.VerifyRequest("POST", "/"),
 				func(w http.ResponseWriter, req *http.Request) {
-					buf := new(bytes.Buffer)
-					err := req.Write(buf)
-					Expect(err).ToNot(HaveOccurred())
-					fmt.Println("RECEIVED REQUEST", buf.String())
-
 					Expect(req.Header.Get("Content-Type")).To(ContainSubstring("multipart/form-data"))
-
 					reader, err := req.MultipartReader()
 					Expect(err).ToNot(HaveOccurred())
 					part, err := reader.NextPart()
@@ -202,14 +228,50 @@ var _ = FDescribe("FastReverseProxy", func() {
 		Expect(err).ToNot(HaveOccurred())
 		req := test_util.NewRequest("POST", testServerRoute, "/", body)
 		req.Header.Set("Content-Type", writer.FormDataContentType())
-		handler.ServeHTTP(proxyWriter, req, nextHandler)
+		resp, err := client.Do(req)
+		Expect(err).ToNot(HaveOccurred())
 
-		Expect(resp.Code).To(Equal(http.StatusOK))
+		Expect(resp.StatusCode).To(Equal(http.StatusCreated))
+		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
+		Eventually(func() bool {
+			return nextCalled
+		}).Should(BeTrue())
+	})
+
+	It("transparently sends chunked request body", func() {
+		testServer.AppendHandlers(
+			ghttp.CombineHandlers(
+				ghttp.VerifyRequest("POST", "/"),
+				func(w http.ResponseWriter, req *http.Request) {
+					Expect(req.TransferEncoding).To(Equal([]string{"chunked"}))
+					fmt.Println("READING REQUEST")
+					body, err := ioutil.ReadAll(req.Body)
+					Expect(err).ToNot(HaveOccurred())
+					fmt.Println("FINISHED READING BODY", string(body))
+				},
+			),
+			ghttp.RespondWith(http.StatusCreated, nil),
+		)
+		// Set up the pipe to write data directly into the Reader.
+		pr, pw := io.Pipe()
+		go func() {
+			for i := 0; i < 5; i++ {
+				fmt.Fprintf(pw, "Chunk %d\n", i)
+				time.Sleep(1000 * time.Millisecond)
+			}
+			pw.Close()
+		}()
+		req := test_util.NewRequest("POST", testServerRoute, "/", pr)
+
+		resp, err := client.Do(req)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
 		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
 		Expect(nextCalled).To(BeTrue())
 	})
 
-	XIt("can handle chunked transfer encoding in the response", func() {
+	XIt("transparently forwards chunked transfer encoding in the response", func() {
 		testServer.AppendHandlers(
 			ghttp.CombineHandlers(
 				ghttp.VerifyRequest("POST", "/"),
@@ -226,13 +288,15 @@ var _ = FDescribe("FastReverseProxy", func() {
 			),
 		)
 		req := test_util.NewRequest("POST", testServerRoute, "/", nil)
-		handler.ServeHTTP(proxyWriter, req, nextHandler)
+		resp, err := client.Do(req)
+		Expect(err).ToNot(HaveOccurred())
 
-		Expect(resp.Code).To(Equal(http.StatusOK))
-		Expect(resp.Result().TransferEncoding).To(Equal([]string{"chunked"}))
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+		Expect(resp.TransferEncoding).To(Equal([]string{"chunked"}))
 		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
 		Expect(nextCalled).To(BeTrue())
 	})
+
 	XIt("transparently returns trailers from the backend", func() {
 		testServer.AppendHandlers(
 			ghttp.CombineHandlers(
@@ -245,11 +309,12 @@ var _ = FDescribe("FastReverseProxy", func() {
 			),
 		)
 		req := test_util.NewRequest("POST", testServerRoute, "/", nil)
-		handler.ServeHTTP(proxyWriter, req, nextHandler)
+		resp, err := client.Do(req)
+		Expect(err).ToNot(HaveOccurred())
 
-		Expect(resp.Code).To(Equal(http.StatusOK))
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
 		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
-		Expect(resp.Result().Trailer.Get("X-Foo-Trailer")).To(Equal("foo"))
+		Expect(resp.Trailer.Get("X-Foo-Trailer")).To(Equal("foo"))
 		Expect(nextCalled).To(BeTrue())
 	})
 
@@ -270,7 +335,8 @@ var _ = FDescribe("FastReverseProxy", func() {
 		for _, h := range proxy.HopHeaders {
 			req.Header.Add(h, "some-value")
 		}
-		handler.ServeHTTP(proxyWriter, req, nextHandler)
+		_, err := client.Do(req)
+		Expect(err).ToNot(HaveOccurred())
 
 		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
 		Expect(nextCalled).To(BeTrue())
@@ -280,13 +346,15 @@ var _ = FDescribe("FastReverseProxy", func() {
 		testServer.AppendHandlers(
 			ghttp.CombineHandlers(
 				ghttp.VerifyRequest("GET", "/"),
-				ghttp.VerifyHeaderKV("X-Forwarded-For", "192.0.2.255"),
+				func(w http.ResponseWriter, req *http.Request) {
+					Expect(req.Header.Get("X-Forwarded-For")).ToNot(BeEmpty())
+				},
 				ghttp.RespondWith(200, nil),
 			),
 		)
 		req := test_util.NewRequest("GET", testServerRoute, "/", nil)
-		req.RemoteAddr = "192.0.2.255:8709"
-		handler.ServeHTTP(proxyWriter, req, nextHandler)
+		_, err := client.Do(req)
+		Expect(err).ToNot(HaveOccurred())
 
 		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
 		Expect(nextCalled).To(BeTrue())
@@ -296,14 +364,16 @@ var _ = FDescribe("FastReverseProxy", func() {
 		testServer.AppendHandlers(
 			ghttp.CombineHandlers(
 				ghttp.VerifyRequest("GET", "/"),
-				ghttp.VerifyHeaderKV("X-Forwarded-For", "192.0.2.254, 192.0.2.255"),
+				func(w http.ResponseWriter, req *http.Request) {
+					Expect(req.Header.Get("X-Forwarded-For")).To(ContainSubstring("192.0.2.254, "))
+				},
 				ghttp.RespondWith(200, nil),
 			),
 		)
 		req := test_util.NewRequest("GET", testServerRoute, "/", nil)
 		req.Header.Set("X-Forwarded-For", "192.0.2.254")
-		req.RemoteAddr = "192.0.2.255:8080"
-		handler.ServeHTTP(proxyWriter, req, nextHandler)
+		_, err := client.Do(req)
+		Expect(err).ToNot(HaveOccurred())
 
 		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
 		Expect(nextCalled).To(BeTrue())
@@ -321,12 +391,13 @@ var _ = FDescribe("FastReverseProxy", func() {
 			),
 		)
 		req := test_util.NewRequest("GET", testServerRoute, "/", nil)
-		handler.ServeHTTP(proxyWriter, req, nextHandler)
+		resp, err := client.Do(req)
+		Expect(err).ToNot(HaveOccurred())
 
 		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
-		Expect(resp.Code).To(Equal(http.StatusOK))
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
 		for _, h := range proxy.HopHeaders {
-			Expect(resp.Header()).ToNot(HaveKey(h))
+			Expect(resp.Header).ToNot(HaveKey(h))
 		}
 		Expect(nextCalled).To(BeTrue())
 	})
@@ -339,10 +410,11 @@ var _ = FDescribe("FastReverseProxy", func() {
 		})
 		It("fails with 404 Not Found", func() {
 			req := test_util.NewRequest("GET", testServerRoute, "/", nil)
-			handler.ServeHTTP(proxyWriter, req, nextHandler)
+			resp, err := client.Do(req)
+			Expect(err).ToNot(HaveOccurred())
 
 			Expect(testServer.ReceivedRequests()).To(HaveLen(0))
-			Expect(resp.Code).To(Equal(http.StatusNotFound))
+			Expect(resp.StatusCode).To(Equal(http.StatusNotFound))
 			Expect(nextCalled).To(BeFalse())
 		})
 	})
@@ -373,7 +445,8 @@ var _ = FDescribe("FastReverseProxy", func() {
 				),
 			)
 			req := test_util.NewRequest("GET", testServerRoute, "/", nil)
-			handler.ServeHTTP(proxyWriter, req, nextHandler)
+			_, err := client.Do(req)
+			Expect(err).ToNot(HaveOccurred())
 			Expect(testServer.ReceivedRequests()).To(HaveLen(1))
 		})
 	})
@@ -395,10 +468,11 @@ var _ = FDescribe("FastReverseProxy", func() {
 		})
 		It("fails with 502 Bad Gateway", func() {
 			req := test_util.NewRequest("GET", testServerRoute, "/", nil)
-			handler.ServeHTTP(proxyWriter, req, nextHandler)
+			resp, err := client.Do(req)
+			Expect(err).ToNot(HaveOccurred())
 
 			Expect(testServer.ReceivedRequests()).To(BeEmpty())
-			Expect(resp.Code).To(Equal(http.StatusBadGateway))
+			Expect(resp.StatusCode).To(Equal(http.StatusBadGateway))
 		})
 	})
 
@@ -419,10 +493,11 @@ var _ = FDescribe("FastReverseProxy", func() {
 		})
 		It("fails with 502 Bad Gateway", func() {
 			req := test_util.NewRequest("GET", testServerRoute, "/", nil)
-			handler.ServeHTTP(proxyWriter, req, nextHandler)
+			resp, err := client.Do(req)
+			Expect(err).ToNot(HaveOccurred())
 
 			Expect(testServer.ReceivedRequests()).To(BeEmpty())
-			Expect(resp.Code).To(Equal(http.StatusBadGateway))
+			Expect(resp.StatusCode).To(Equal(http.StatusBadGateway))
 		})
 	})
 
@@ -441,10 +516,11 @@ var _ = FDescribe("FastReverseProxy", func() {
 		})
 		It("fails with 502 Bad Gateway", func() {
 			req := test_util.NewRequest("GET", testServerRoute, "/", nil)
-			handler.ServeHTTP(proxyWriter, req, nextHandler)
+			resp, err := client.Do(req)
+			Expect(err).ToNot(HaveOccurred())
 
 			Expect(testServer.ReceivedRequests()).To(BeEmpty())
-			Expect(resp.Code).To(Equal(http.StatusBadGateway))
+			Expect(resp.StatusCode).To(Equal(http.StatusBadGateway))
 		})
 	})
 })

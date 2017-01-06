@@ -3,8 +3,11 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"strings"
@@ -54,6 +57,8 @@ type FastReverseProxy struct {
 	traceKey                 string
 	ip                       string
 	secureCookies            bool
+	tlsConfig                *tls.Config
+	endpointTimeout          time.Duration
 }
 
 // NewFastReverseProxy creates a new FastReverseProxy
@@ -61,9 +66,7 @@ func NewFastReverseProxy(registry LookupRegistry, logger lager.Logger,
 	reporter reporter.ProxyReporter, routeServiceConfig *routeservice.RouteServiceConfig,
 	forceForwardedProtoHttps bool,
 	traceKey string, defaultLoadBalance string,
-	ip string, secureCookies bool) *FastReverseProxy {
-
-	//	routeServiceConfig := routeservice.NewRouteServiceConfig(logger, routeServiceEnabled, routeServiceTimeout, crypto, cryptoPrev, routeServiceRecommendHttps)
+	ip string, secureCookies bool, tlsConfig *tls.Config, endpointTimeout time.Duration) *FastReverseProxy {
 
 	return &FastReverseProxy{
 		registry:                 registry,
@@ -74,6 +77,8 @@ func NewFastReverseProxy(registry LookupRegistry, logger lager.Logger,
 		traceKey:                 traceKey,
 		ip:                       ip,
 		defaultLoadBalance:       defaultLoadBalance,
+		tlsConfig:                tlsConfig,
+		endpointTimeout:          endpointTimeout,
 		//		secureCookies:            secureCookies,
 	}
 }
@@ -92,10 +97,13 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	accessLog := alr.(*schema.AccessLogRecord)
 	handler := handler.NewRequestHandler(req, proxyWriter, f.reporter, accessLog, f.logger)
 
-	err := copyRequest(req, backendReq)
+	closer, err := copyRequest(req, backendReq)
 	if err != nil {
 		fmt.Fprintf(rw, "Error parsing request: %s", err.Error())
 		return
+	}
+	if closer != nil {
+		defer closer.Close()
 	}
 
 	for _, h := range HopHeaders {
@@ -165,10 +173,52 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 		return
 	}
 
-	//backend := true
-	//route service stuff
-	// routeServiceUrl := pool.RouteServiceUrl()
-	// router_service.ForwardRouter(routerServiceUrl, f.routeServiceConfig)
+	backend := true
+	routeServiceUrl := pool.RouteServiceUrl()
+	// Attempted to use a route service when it is not supported
+	if routeServiceUrl != "" && !f.routeServiceConfig.RouteServiceEnabled() {
+		handler.HandleUnsupportedRouteService()
+		return
+	}
+
+	var routeServiceArgs routeservice.RouteServiceRequest
+	if routeServiceUrl != "" {
+		rsSignature := req.Header.Get(routeservice.RouteServiceSignature)
+
+		var recommendedScheme string
+
+		if f.routeServiceConfig.RouteServiceRecommendHttps() {
+			recommendedScheme = "https"
+		} else {
+			recommendedScheme = "http"
+		}
+
+		forwardedUrlRaw := recommendedScheme + "://" + hostWithoutPort(req) + req.RequestURI
+		if hasBeenToRouteService(routeServiceUrl, rsSignature) {
+			// A request from a route service destined for a backend instances
+			routeServiceArgs.URLString = routeServiceUrl
+			err := f.routeServiceConfig.ValidateSignature(&req.Header, forwardedUrlRaw)
+			if err != nil {
+				handler.HandleBadSignature(err)
+				return
+			}
+			backendReq.Header.Del(routeservice.RouteServiceSignature)
+			backendReq.Header.Del(routeservice.RouteServiceMetadata)
+			backendReq.Header.Del(routeservice.RouteServiceForwardedURL)
+		} else {
+			var err error
+			// should not hardcode http, will be addressed by #100982038
+			routeServiceArgs, err = f.routeServiceConfig.Request(routeServiceUrl, forwardedUrlRaw)
+			backend = false
+			if err != nil {
+				handler.HandleRouteServiceFailure(err)
+				return
+			}
+			backendReq.Header.Set(routeservice.RouteServiceSignature, routeServiceArgs.Signature)
+			backendReq.Header.Set(routeservice.RouteServiceMetadata, routeServiceArgs.Metadata)
+			backendReq.Header.Set(routeservice.RouteServiceForwardedURL, routeServiceArgs.ForwardedURL)
+		}
+	}
 
 	var endpoint *route.Endpoint
 	for retry := 0; retry < maxRetries; retry++ {
@@ -186,18 +236,26 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 		// fmt.Println(req)
 		// fmt.Println(backendReq.String())
 
-		hc := fasthttp.HostClient{
-			Addr: endpoint.CanonicalAddr(),
+		var hc fasthttp.HostClient
+		if backend {
+			fmt.Println("MAKING REQUEST TO BACKEND")
+			hc.Addr = endpoint.CanonicalAddr()
+		} else {
+			fmt.Println("MAKING REQUEST TO ROUTE SERVICE")
+			hc.Addr = routeServiceArgs.ParsedUrl.Host
+			hc.IsTLS = routeServiceArgs.ParsedUrl.Scheme == "https"
 		}
-		// timeout should be 15min / def timeout
+		hc.TLSConfig = f.tlsConfig
+		// timeout should be 1min / def timeout
 		fmt.Println("Performing request...")
-		err = hc.DoTimeout(backendReq, backendResp, 30*time.Second)
+		err = hc.DoTimeout(backendReq, backendResp, f.endpointTimeout)
+		// err = hc.Do(backendReq, backendResp)
 		fmt.Println("Finished performing request...")
 		// fmt.Println("** REM request completed")
 
 		iter.PostRequest(endpoint)
 		if err != nil {
-			fmt.Println("Error:", err.Error())
+			fmt.Println("FASTHTTP Error:", err.Error())
 		}
 		if err == nil || !retryableError(err) {
 			break
@@ -223,12 +281,12 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 		router_http.SetTraceHeaders(rw, f.ip, endpoint.CanonicalAddr())
 	}
 
-	//	latency := time.Since(accessLog.StartedAt)
+	latency := time.Since(accessLog.StartedAt)
 
-	//	f.reporter.CaptureRoutingResponse(endpoint, backendResp, accessLog.StartedAt, latency)
+	f.reporter.CaptureRoutingResponse(endpoint, backendResp, accessLog.StartedAt, latency)
 
 	if endpoint.PrivateInstanceId != "" {
-		setupStickySession(rw, backendResp.Header, endpoint,
+		setupStickySession(rw, &backendResp.Header, endpoint,
 			stickyEndpointId, f.secureCookies, pool.ContextPath())
 	}
 
@@ -247,10 +305,6 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	}
 	rw.WriteHeader(backendResp.StatusCode())
 
-	if backendResp.IsBodyStream() {
-		fmt.Println("IS BODY STREAM *********************")
-	}
-	fmt.Println("GOT BODY", string(backendResp.Body()))
 	if fl, ok := rw.(http.Flusher); ok {
 		fl.Flush()
 	}
@@ -277,7 +331,7 @@ func retryableError(err error) bool {
 	return false
 }
 
-func setupStickySession(responseWriter http.ResponseWriter, backendRespHeaders fasthttp.ResponseHeader,
+func setupStickySession(responseWriter http.ResponseWriter, backendRespHeaders *fasthttp.ResponseHeader,
 	endpoint *route.Endpoint,
 	originalEndpointId string,
 	secureCookies bool,
@@ -321,35 +375,77 @@ func setupStickySession(responseWriter http.ResponseWriter, backendRespHeaders f
 	}
 }
 
-func copyRequest(req *http.Request, newReq *fasthttp.Request) error {
-	buf := new(bytes.Buffer)
-	err := req.Write(buf)
-	if err != nil {
-		return err
+func copyRequest(req *http.Request, newReq *fasthttp.Request) (io.ReadCloser, error) {
+	fmt.Println(req.TransferEncoding)
+	var closer io.ReadCloser
+	if req.Body != nil {
+		closer = req.Body
+		req.Body = ioutil.NopCloser(req.Body)
+	}
+	if len(req.TransferEncoding) > 0 && req.TransferEncoding[0] == "chunked" {
+		fmt.Println("CHUNKED REQUEST INCOMING")
+
+		buf := new(bytes.Buffer)
+		fmt.Println("Reading request...")
+		err := req.Write(buf)
+		if err != nil {
+			return nil, err
+		}
+
+		fmt.Println("Finished reading request", buf.String())
+
+		newReq.Header.SetMethod(req.Method)
+		newReq.Header.SetHost(req.Host)
+		for k, v := range req.Header {
+			for _, hv := range v {
+				newReq.Header.Add(k, hv)
+			}
+		}
+		if req.RequestURI != "" {
+			newReq.SetRequestURI(req.RequestURI)
+		} else {
+			newReq.SetRequestURI(req.URL.RequestURI())
+		}
+
+		newReq.SetBodyStream(req.Body, -1)
+	} else {
+		buf := new(bytes.Buffer)
+		fmt.Println("Reading request...")
+		err := req.Write(buf)
+		if err != nil {
+			return nil, err
+		}
+
+		fmt.Println("Finished reading request", buf.String())
+
+		err = newReq.Read(bufio.NewReader(buf))
+		if err != nil {
+			return nil, err
+		}
+		if req.RequestURI != "" {
+			newReq.SetRequestURI(req.RequestURI)
+		}
+		fmt.Println("Finished copying request", newReq.String())
+
+		// newBuf := new(bytes.Buffer)
+		// writer := bufio.NewWriter(newBuf)
+		// newReq.Write(writer)
+		// writer.Flush()
+		//
+		// fmt.Println("copied req", newBuf.String())
 	}
 
-	fmt.Println("copying req", buf.String())
-
-	err = newReq.Read(bufio.NewReader(buf))
-	if err != nil {
-		return err
-	}
-	if req.RequestURI != "" {
-		newReq.SetRequestURI(req.RequestURI)
-	}
-
-	newBuf := new(bytes.Buffer)
-	writer := bufio.NewWriter(newBuf)
-	newReq.Write(writer)
-	writer.Flush()
-
-	fmt.Println("copied req", newBuf.String())
-	return nil
+	return closer, nil
 }
 
 func setupRequest(request *fasthttp.Request, endpoint *route.Endpoint) {
 	request.Header.Set("X-CF-ApplicationID", endpoint.ApplicationId) // why do we need this ?
-	//handler.SetRequestXCfInstanceId(request, endpoint)
+	value := endpoint.PrivateInstanceId
+	if value == "" {
+		value = endpoint.CanonicalAddr()
+	}
+
+	request.Header.Set(router_http.CfInstanceIdHeader, value)
 	// if ok := request.Header.Peek(http.CanonicalHeaderKey("X-Request-Start")); string(ok) != "" {
 	// 	request.Header.Set("X-Request-Start", strconv.FormatInt(time.Now().UnixNano()/1e6, 10))
 	// }
