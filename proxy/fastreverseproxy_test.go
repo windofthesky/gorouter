@@ -31,7 +31,7 @@ import (
 	"github.com/urfave/negroni"
 )
 
-var _ = Describe("FastReverseProxy", func() {
+var _ = FDescribe("FastReverseProxy", func() {
 	var (
 		handler            negroni.Handler
 		testServer         *ghttp.Server
@@ -45,7 +45,7 @@ var _ = Describe("FastReverseProxy", func() {
 	)
 
 	nextHandler := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		rw.WriteHeader(http.StatusTeapot)
+		//	rw.WriteHeader(http.StatusTeapot)
 
 		nextCalled = true
 	})
@@ -62,7 +62,7 @@ var _ = Describe("FastReverseProxy", func() {
 
 		testServerRoute = "foo.com"
 
-		logger = lagertest.NewTestLogger("fastreverseproxy-test")
+		logger = lagertest.NewTestLogger("reverseproxy-test")
 
 		// Set up route registry
 		reg = new(registryfakes.FakeRegistryInterface)
@@ -271,7 +271,7 @@ var _ = Describe("FastReverseProxy", func() {
 		Expect(nextCalled).To(BeTrue())
 	})
 
-	XIt("transparently forwards chunked transfer encoding in the response", func() {
+	It("transparently forwards chunked transfer encoding in the response", func() {
 		testServer.AppendHandlers(
 			ghttp.CombineHandlers(
 				ghttp.VerifyRequest("POST", "/"),
@@ -297,7 +297,7 @@ var _ = Describe("FastReverseProxy", func() {
 		Expect(nextCalled).To(BeTrue())
 	})
 
-	XIt("transparently returns trailers from the backend", func() {
+	It("transparently returns trailers from the backend", func() {
 		testServer.AppendHandlers(
 			ghttp.CombineHandlers(
 				ghttp.VerifyRequest("POST", "/"),
@@ -385,7 +385,7 @@ var _ = Describe("FastReverseProxy", func() {
 				ghttp.VerifyRequest("GET", "/"),
 				func(w http.ResponseWriter, req *http.Request) {
 					for _, h := range proxy.HopHeaders {
-						w.Header().Add(h, "some-value")
+						w.Header().Add(h, "chunked")
 					}
 				},
 			),
@@ -419,7 +419,7 @@ var _ = Describe("FastReverseProxy", func() {
 		})
 	})
 
-	Context("when a connection attempt to a backend fails", func() {
+	FContext("when a connection attempt to a backend fails", func() {
 		BeforeEach(func() {
 			pool := route.NewPool(1*time.Second, "")
 			badEndpoint1 := route.NewEndpoint("foo", "192.0.2.1", uint16(80), "", "", nil, -1, "", models.ModificationTag{})

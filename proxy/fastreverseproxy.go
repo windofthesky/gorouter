@@ -1,12 +1,9 @@
 package proxy
 
 import (
-	"bufio"
-	"bytes"
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -21,8 +18,6 @@ import (
 	"code.cloudfoundry.org/gorouter/route"
 	"code.cloudfoundry.org/gorouter/routeservice"
 	"code.cloudfoundry.org/lager"
-
-	"github.com/valyala/fasthttp"
 )
 
 // HopHeaders are hop-by-hop headers that are removed when sent to the backend.
@@ -39,7 +34,7 @@ var HopHeaders = []string{
 	"Upgrade",
 }
 
-var xForwardedForKey = []byte(`X-Forwarded-For`)
+var xForwardedForKey = "X-Forwarded-For"
 
 const (
 	maxRetries = 3
@@ -84,10 +79,10 @@ func NewFastReverseProxy(registry LookupRegistry, logger lager.Logger,
 }
 
 func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, next http.HandlerFunc) {
-	backendReq := fasthttp.AcquireRequest()
-	backendResp := fasthttp.AcquireResponse()
-	defer fasthttp.ReleaseRequest(backendReq)
-	defer fasthttp.ReleaseResponse(backendResp)
+	//	backendReq := fasthttp.AcquireRequest()
+	//	backendResp := fasthttp.AcquireResponse()
+	// defer fasthttp.ReleaseRequest(backendReq)
+	// defer fasthttp.ReleaseResponse(backendResp)
 
 	proxyWriter := rw.(utils.ProxyResponseWriter)
 	alr := proxyWriter.Context().Value("AccessLogRecord")
@@ -97,14 +92,16 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	accessLog := alr.(*schema.AccessLogRecord)
 	handler := handler.NewRequestHandler(req, proxyWriter, f.reporter, accessLog, f.logger)
 
-	closer, err := copyRequest(req, backendReq)
-	if err != nil {
-		fmt.Fprintf(rw, "Error parsing request: %s", err.Error())
-		return
-	}
-	if closer != nil {
-		defer closer.Close()
-	}
+	backendReq := new(http.Request)
+	*backendReq = *req
+	//	closer, err := copyRequest(req, backendReq)
+	// if err != nil {
+	// 	fmt.Fprintf(rw, "Error parsing request: %s", err.Error())
+	// 	return
+	// }
+	// if closer != nil {
+	// 	defer closer.Close()
+	// }
 
 	for _, h := range HopHeaders {
 		backendReq.Header.Del(h)
@@ -113,15 +110,13 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 		// If we aren't the first proxy retain prior
 		// X-Forwarded-For information as a comma+space
 		// separated list and fold multiple headers into one.
-		var clientIPBytes []byte
-		prior := backendReq.Header.PeekBytes(xForwardedForKey)
-		if len(prior) != 0 {
-			clientIPBytes = append(prior, ',', ' ')
-			clientIPBytes = append(clientIPBytes, []byte(clientIP)...)
-		} else {
-			clientIPBytes = []byte(clientIP)
+		var clientIPKey string
+		clientIPKey = clientIP
+		prior := backendReq.Header.Get(xForwardedForKey)
+		if prior != "" {
+			clientIPKey = fmt.Sprintf("%s, %s", prior, clientIP)
 		}
-		backendReq.Header.SetBytesKV(xForwardedForKey, clientIPBytes)
+		backendReq.Header.Set(xForwardedForKey, clientIPKey)
 	}
 	// else {
 	// 	fmt.Printf("got an error %s\n", err.Error())
@@ -220,14 +215,15 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 		}
 	}
 
+	var backendResp *http.Response
 	var endpoint *route.Endpoint
+	var err error
 	for retry := 0; retry < maxRetries; retry++ {
 		endpoint, err = selectEndpoint(iter)
 
 		if err != nil {
 			break
 		}
-
 		setupRequest(backendReq, endpoint)
 
 		iter.PreRequest(endpoint)
@@ -236,28 +232,49 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 		// fmt.Println(req)
 		// fmt.Println(backendReq.String())
 
-		var hc fasthttp.HostClient
-		if backend {
-			fmt.Println("MAKING REQUEST TO BACKEND")
-			hc.Addr = endpoint.CanonicalAddr()
-		} else {
-			fmt.Println("MAKING REQUEST TO ROUTE SERVICE")
-			hc.Addr = routeServiceArgs.ParsedUrl.Host
-			hc.IsTLS = routeServiceArgs.ParsedUrl.Scheme == "https"
+		//		var hc fasthttp.HostClient
+		var hc http.Client
+		var netTransport = &http.Transport{
+			Dial: (&net.Dialer{
+				Timeout: 5 * time.Second,
+			}).Dial,
+			TLSHandshakeTimeout: 5 * time.Second,
+			//	TLSConfig:           f.TLSConfig,
 		}
-		hc.TLSConfig = f.tlsConfig
+		hc.Transport = netTransport
+		//	hc.Timeout = 5 * time.Second
+
+		// } else {
+		// 	fmt.Println("MAKING REQUEST TO ROUTE SERVICE")
+		// 	hc.Addr = routeServiceArgs.ParsedUrl.Host
+		// 	hc.IsTLS = routeServiceArgs.ParsedUrl.Scheme == "https"
+		// }
 		// timeout should be 1min / def timeout
 		fmt.Println("Performing request...")
-		err = hc.DoTimeout(backendReq, backendResp, f.endpointTimeout)
-		// err = hc.Do(backendReq, backendResp)
+		setupProxyRequest(req, backendReq, false)
+		backendReq.RequestURI = ""
+
+		if backend {
+			fmt.Println("MAKING REQUEST TO BACKEND")
+			backendReq.URL.Host = endpoint.CanonicalAddr()
+			// hc = endpoint.CanonicalAddr()
+		}
+		fmt.Println("backend host..", backendReq.Host)
+		backendResp, err = hc.Do(backendReq)
+		// err = hc.DoTimeout(backendReq, backendResp, f.endpointTimeout)
 		fmt.Println("Finished performing request...")
 		// fmt.Println("** REM request completed")
 
 		iter.PostRequest(endpoint)
 		if err != nil {
-			fmt.Println("FASTHTTP Error:", err.Error())
+			fmt.Println("HTTP Error:", err.Error())
 		}
-		if err == nil || !retryableError(err) {
+		if err == nil {
+			fmt.Println("breaking out  ..!!")
+			break
+		}
+		if !retryableError(err) {
+			fmt.Println("breaking out from rety error..!!", err)
 			break
 		}
 
@@ -265,15 +282,15 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	}
 
 	if err != nil {
-		//		rw.WriteHeader(http.StatusBadGateway)
+		//	rw.WriteHeader(http.StatusBadGateway)
 		handler.HandleBadGateway(err, req)
-		//		rw.Write([]byte("Exceeded max retries: Timed out connecting to backends."))
+		rw.Write([]byte("Exceeded max retries: Timed out connecting to backends."))
 		return
 	}
 
 	//		accessLog.FirstByteAt = time.Now()
 	if backendResp != nil {
-		accessLog.StatusCode = backendResp.StatusCode()
+		accessLog.StatusCode = backendResp.StatusCode
 	}
 
 	if f.traceKey != "" && endpoint != nil && req.Header.Get(router_http.VcapTraceHeader) == f.traceKey {
@@ -281,164 +298,166 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 		router_http.SetTraceHeaders(rw, f.ip, endpoint.CanonicalAddr())
 	}
 
-	latency := time.Since(accessLog.StartedAt)
+	//	latency := time.Since(accessLog.StartedAt)
 
-	f.reporter.CaptureRoutingResponse(endpoint, backendResp, accessLog.StartedAt, latency)
+	//	f.reporter.CaptureRoutingResponse(endpoint, backendResp, accessLog.StartedAt, latency)
 
-	if endpoint.PrivateInstanceId != "" {
-		setupStickySession(rw, &backendResp.Header, endpoint,
-			stickyEndpointId, f.secureCookies, pool.ContextPath())
-	}
+	// if endpoint.PrivateInstanceId != "" {
+	// 	setupStickySession(rw, &backendResp.Header, endpoint,
+	// 		stickyEndpointId, f.secureCookies, pool.ContextPath())
+	// }
 
 	// TODO: add trailers?
 	for _, h := range HopHeaders {
 		backendResp.Header.Del(h)
 	}
+	h := backendResp.Header
 
-	backendResp.Header.VisitAll(func(key []byte, value []byte) {
-		rw.Header().Add(string(key), string(value))
-	})
+	for k, v := range h {
+		rw.Header().Set(k, fmt.Sprintf("%s", v))
+	}
 	// if Content-Type not in response, nil out to suppress Go's auto-detect
-	if contentType := backendResp.Header.Peek("Content-Type"); len(contentType) == 0 {
-		//fmt.Println("Found header", string(ok))
+	if contentType := backendResp.Header.Get("Content-Type"); len(contentType) == 0 {
 		rw.Header()["Content-Type"] = nil
 	}
-	rw.WriteHeader(backendResp.StatusCode())
+	fmt.Println("setting status")
 
-	if fl, ok := rw.(http.Flusher); ok {
-		fl.Flush()
+	rw.WriteHeader(backendResp.StatusCode)
+
+	// if fl, ok := rw.(http.Flusher); ok {
+	// 	fl.Flush()
+	// }
+	pbytes, err := ioutil.ReadAll(backendResp.Body)
+	if err != nil {
+		fmt.Printf("Error writing response: %s\n", err.Error())
 	}
-
-	err = backendResp.BodyWriteTo(rw)
+	_, err = rw.Write(pbytes)
 	if err != nil {
 		// TODO: How do we handle this case?
 		fmt.Printf("Error writing response: %s\n", err.Error())
 		return
 	}
-	//	fmt.Println("Finished req")
+	fmt.Println("Finished req")
+	fmt.Println("Finished writing resp bytes", string(pbytes))
 
 	next(rw, req)
 
 }
 
+// why are we failing to convert the obj
 func retryableError(err error) bool {
-	if err == fasthttp.ErrDialTimeout {
-		return true
-	}
-	if ne, netErr := err.(*net.OpError); netErr && ne.Op == "dial" {
-		return true
-	}
-	return false
+	netErrString := err.Error()
+	return strings.Contains(netErrString, "dial")
 }
 
-func setupStickySession(responseWriter http.ResponseWriter, backendRespHeaders *fasthttp.ResponseHeader,
-	endpoint *route.Endpoint,
-	originalEndpointId string,
-	secureCookies bool,
-	path string) {
-	secure := false
-	maxAge := 0
+// func setupStickySession(responseWriter http.ResponseWriter, backendRespHeaders *fasthttp.ResponseHeader,
+// 	endpoint *route.Endpoint,
+// 	originalEndpointId string,
+// 	secureCookies bool,
+// 	path string) {
+// 	secure := false
+// 	maxAge := 0
 
-	// did the endpoint change?
-	sticky := originalEndpointId != "" && originalEndpointId != endpoint.PrivateInstanceId
+// 	// did the endpoint change?
+// 	sticky := originalEndpointId != "" && originalEndpointId != endpoint.PrivateInstanceId
 
-	cookieFunc := func(key, value []byte) {
-		if string(key) == StickyCookieKey {
-			sticky = true
-			// TODO: parse resp cookie to get the max age since fhttp does not support this feature
-			//	if v.MaxAge < 0 {
-			//			maxAge = v.MaxAge
-			//		}
-			//		secure = v.Secure
-			//			break
-		}
-	}
+// 	cookieFunc := func(key, value []byte) {
+// 		if string(key) == StickyCookieKey {
+// 			sticky = true
+// 			// TODO: parse resp cookie to get the max age since fhttp does not support this feature
+// 			//	if v.MaxAge < 0 {
+// 			//			maxAge = v.MaxAge
+// 			//		}
+// 			//		secure = v.Secure
+// 			//			break
+// 		}
+// 	}
 
-	backendRespHeaders.VisitAllCookie(cookieFunc)
-	if sticky {
-		// right now secure attribute would as equal to the JSESSION ID cookie (if present),
-		// but override if set to true in config
-		if secureCookies {
-			secure = true
-		}
+// 	backendRespHeaders.VisitAllCookie(cookieFunc)
+// 	if sticky {
+// 		// right now secure attribute would as equal to the JSESSION ID cookie (if present),
+// 		// but override if set to true in config
+// 		if secureCookies {
+// 			secure = true
+// 		}
 
-		cookie := &http.Cookie{
-			Name:     VcapCookieId,
-			Value:    endpoint.PrivateInstanceId,
-			Path:     path,
-			MaxAge:   maxAge,
-			HttpOnly: true,
-			Secure:   secure,
-		}
+// 		cookie := &http.Cookie{
+// 			Name:     VcapCookieId,
+// 			Value:    endpoint.PrivateInstanceId,
+// 			Path:     path,
+// 			MaxAge:   maxAge,
+// 			HttpOnly: true,
+// 			Secure:   secure,
+// 		}
 
-		http.SetCookie(responseWriter, cookie)
-	}
-}
+// 		http.SetCookie(responseWriter, cookie)
+// 	}
+// }
 
-func copyRequest(req *http.Request, newReq *fasthttp.Request) (io.ReadCloser, error) {
-	fmt.Println(req.TransferEncoding)
-	var closer io.ReadCloser
-	if req.Body != nil {
-		closer = req.Body
-		req.Body = ioutil.NopCloser(req.Body)
-	}
-	if len(req.TransferEncoding) > 0 && req.TransferEncoding[0] == "chunked" {
-		fmt.Println("CHUNKED REQUEST INCOMING")
+// func copyRequest(req *http.Request, newReq *http.Request) (io.ReadCloser, error) {
+// 	fmt.Println(req.TransferEncoding)
+// 	var closer io.ReadCloser
+// 	if req.Body != nil {
+// 		closer = req.Body
+// 		req.Body = ioutil.NopCloser(req.Body)
+// 	}
+// 	if len(req.TransferEncoding) > 0 && req.TransferEncoding[0] == "chunked" {
+// 		fmt.Println("CHUNKED REQUEST INCOMING")
 
-		buf := new(bytes.Buffer)
-		fmt.Println("Reading request...")
-		err := req.Write(buf)
-		if err != nil {
-			return nil, err
-		}
+// 		buf := new(bytes.Buffer)
+// 		fmt.Println("Reading request...")
+// 		err := req.Write(buf)
+// 		if err != nil {
+// 			return nil, err
+// 		}
 
-		fmt.Println("Finished reading request", buf.String())
+// 		fmt.Println("Finished reading request", buf.String())
 
-		newReq.Header.SetMethod(req.Method)
-		newReq.Header.SetHost(req.Host)
-		for k, v := range req.Header {
-			for _, hv := range v {
-				newReq.Header.Add(k, hv)
-			}
-		}
-		if req.RequestURI != "" {
-			newReq.SetRequestURI(req.RequestURI)
-		} else {
-			newReq.SetRequestURI(req.URL.RequestURI())
-		}
+// 		newReq.Header.SetMethod(req.Method)
+// 		newReq.Header.SetHost(req.Host)
+// 		for k, v := range req.Header {
+// 			for _, hv := range v {
+// 				newReq.Header.Add(k, hv)
+// 			}
+// 		}
+// 		if req.RequestURI != "" {
+// 			newReq.SetRequestURI(req.RequestURI)
+// 		} else {
+// 			newReq.SetRequestURI(req.URL.RequestURI())
+// 		}
 
-		newReq.SetBodyStream(req.Body, -1)
-	} else {
-		buf := new(bytes.Buffer)
-		fmt.Println("Reading request...")
-		err := req.Write(buf)
-		if err != nil {
-			return nil, err
-		}
+// 		newReq.SetBodyStream(req.Body, -1)
+// 	} else {
+// 		buf := new(bytes.Buffer)
+// 		fmt.Println("Reading request...")
+// 		err := req.Write(buf)
+// 		if err != nil {
+// 			return nil, err
+// 		}
 
-		fmt.Println("Finished reading request", buf.String())
+// 		fmt.Println("Finished reading request", buf.String())
 
-		err = newReq.Read(bufio.NewReader(buf))
-		if err != nil {
-			return nil, err
-		}
-		if req.RequestURI != "" {
-			newReq.SetRequestURI(req.RequestURI)
-		}
-		fmt.Println("Finished copying request", newReq.String())
+// 		err = newReq.Read(bufio.NewReader(buf))
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 		if req.RequestURI != "" {
+// 			newReq.SetRequestURI(req.RequestURI)
+// 		}
+// 		fmt.Println("Finished copying request", newReq.String())
 
-		// newBuf := new(bytes.Buffer)
-		// writer := bufio.NewWriter(newBuf)
-		// newReq.Write(writer)
-		// writer.Flush()
-		//
-		// fmt.Println("copied req", newBuf.String())
-	}
+// 		// newBuf := new(bytes.Buffer)
+// 		// writer := bufio.NewWriter(newBuf)
+// 		// newReq.Write(writer)
+// 		// writer.Flush()
+// 		//
+// 		// fmt.Println("copied req", newBuf.String())
+// 	}
 
-	return closer, nil
-}
+// 	return closer, nil
+// }
 
-func setupRequest(request *fasthttp.Request, endpoint *route.Endpoint) {
+func setupRequest(request *http.Request, endpoint *route.Endpoint) {
 	request.Header.Set("X-CF-ApplicationID", endpoint.ApplicationId) // why do we need this ?
 	value := endpoint.PrivateInstanceId
 	if value == "" {

@@ -11,6 +11,7 @@ import (
 	"code.cloudfoundry.org/gorouter/common/secure"
 	"code.cloudfoundry.org/gorouter/handlers"
 	"code.cloudfoundry.org/gorouter/metrics/reporter"
+	"code.cloudfoundry.org/gorouter/proxy/handler"
 	"code.cloudfoundry.org/gorouter/proxy/utils"
 	"code.cloudfoundry.org/gorouter/route"
 	"code.cloudfoundry.org/gorouter/routeservice"
@@ -293,25 +294,25 @@ func NewProxy(args ProxyArgs) Proxy {
 // 	}
 // }
 
-// func setupProxyRequest(source *http.Request, target *http.Request, forceForwardedProtoHttps bool) {
-// 	if forceForwardedProtoHttps {
-// 		target.Header.Set("X-Forwarded-Proto", "https")
-// 	} else if source.Header.Get("X-Forwarded-Proto") == "" {
-// 		scheme := "http"
-// 		if source.TLS != nil {
-// 			scheme = "https"
-// 		}
-// 		target.Header.Set("X-Forwarded-Proto", scheme)
-// 	}
+func setupProxyRequest(source *http.Request, target *http.Request, forceForwardedProtoHttps bool) {
+	if forceForwardedProtoHttps {
+		target.Header.Set("X-Forwarded-Proto", "https")
+	} else if source.Header.Get("X-Forwarded-Proto") == "" {
+		scheme := "http"
+		if source.TLS != nil {
+			scheme = "https"
+		}
+		target.Header.Set("X-Forwarded-Proto", scheme)
+	}
 
-// 	target.URL.Scheme = "http"
-// 	target.URL.Host = source.Host
-// 	target.URL.Opaque = source.RequestURI
-// 	target.URL.RawQuery = ""
+	target.URL.Scheme = "http"
+	target.URL.Host = source.Host
+	target.URL.Opaque = source.RequestURI
+	target.URL.RawQuery = ""
 
-// 	handler.SetRequestXRequestStart(source)
-// 	target.Header.Del(router_http.CfAppInstance)
-// }
+	handler.SetRequestXRequestStart(source)
+	//target.Header.Del(router_http.CfAppInstance)
+}
 
 type wrappedIterator struct {
 	nested    route.EndpointIterator
