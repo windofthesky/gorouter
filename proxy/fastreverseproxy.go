@@ -250,19 +250,18 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 		// 	hc.IsTLS = routeServiceArgs.ParsedUrl.Scheme == "https"
 		// }
 		// timeout should be 1min / def timeout
-		fmt.Println("Performing request...")
+		//		fmt.Println("Performing request...")
 		setupProxyRequest(req, backendReq, false)
 		backendReq.RequestURI = ""
 
 		if backend {
-			fmt.Println("MAKING REQUEST TO BACKEND")
 			backendReq.URL.Host = endpoint.CanonicalAddr()
 			// hc = endpoint.CanonicalAddr()
 		}
-		fmt.Println("backend host..", backendReq.Host)
+		//		fmt.Println("backend host..", backendReq.Host)
 		backendResp, err = hc.Do(backendReq)
 		// err = hc.DoTimeout(backendReq, backendResp, f.endpointTimeout)
-		fmt.Println("Finished performing request...")
+		//	fmt.Println("Finished performing request...")
 		// fmt.Println("** REM request completed")
 
 		iter.PostRequest(endpoint)
@@ -270,11 +269,9 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 			fmt.Println("HTTP Error:", err.Error())
 		}
 		if err == nil {
-			fmt.Println("breaking out  ..!!")
 			break
 		}
 		if !retryableError(err) {
-			fmt.Println("breaking out from rety error..!!", err)
 			break
 		}
 
@@ -294,7 +291,7 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	}
 
 	if f.traceKey != "" && endpoint != nil && req.Header.Get(router_http.VcapTraceHeader) == f.traceKey {
-		fmt.Println("configured trace keys")
+		//fmt.Println("configured trace keys")
 		router_http.SetTraceHeaders(rw, f.ip, endpoint.CanonicalAddr())
 	}
 
@@ -314,13 +311,12 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	h := backendResp.Header
 
 	for k, v := range h {
-		rw.Header().Set(k, fmt.Sprintf("%s", v))
+		rw.Header().Set(k, strings.Join(v, ","))
 	}
 	// if Content-Type not in response, nil out to suppress Go's auto-detect
 	if contentType := backendResp.Header.Get("Content-Type"); len(contentType) == 0 {
 		rw.Header()["Content-Type"] = nil
 	}
-	fmt.Println("setting status")
 
 	rw.WriteHeader(backendResp.StatusCode)
 
@@ -337,8 +333,8 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 		fmt.Printf("Error writing response: %s\n", err.Error())
 		return
 	}
-	fmt.Println("Finished req")
-	fmt.Println("Finished writing resp bytes", string(pbytes))
+	// fmt.Println("Finished req")
+	// fmt.Println("Finished writing resp bytes", string(pbytes))
 
 	next(rw, req)
 
