@@ -4,10 +4,12 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"code.cloudfoundry.org/gorouter/access_log/schema"
@@ -92,15 +94,20 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	accessLog := alr.(*schema.AccessLogRecord)
 	handler := handler.NewRequestHandler(req, proxyWriter, f.reporter, accessLog, f.logger)
 
+	var closer io.ReadCloser
+	if req.Body != nil {
+		closer = req.Body
+		req.Body = ioutil.NopCloser(req.Body)
+		defer closer.Close()
+	}
+
 	backendReq := new(http.Request)
 	*backendReq = *req
+
 	//	closer, err := copyRequest(req, backendReq)
 	// if err != nil {
 	// 	fmt.Fprintf(rw, "Error parsing request: %s", err.Error())
 	// 	return
-	// }
-	// if closer != nil {
-	// 	defer closer.Close()
 	// }
 
 	for _, h := range HopHeaders {
@@ -239,6 +246,7 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 				Timeout: 5 * time.Second,
 			}).Dial,
 			TLSHandshakeTimeout: 5 * time.Second,
+			DisableKeepAlives:   true,
 			//	TLSConfig:           f.TLSConfig,
 		}
 		hc.Transport = netTransport
@@ -318,21 +326,47 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 		rw.Header()["Content-Type"] = nil
 	}
 
+	if len(backendResp.Trailer) > 0 {
+		trailerKeys := make([]string, 0, len(backendResp.Trailer))
+		for k := range backendResp.Trailer {
+			trailerKeys = append(trailerKeys, k)
+		}
+		rw.Header().Add("Trailer", strings.Join(trailerKeys, ", "))
+	}
+
 	rw.WriteHeader(backendResp.StatusCode)
+
+	if len(backendResp.Trailer) > 0 {
+		// Force chunking if we saw a response trailer.
+		// This prevents net/http from calculating the length for short
+		// bodies and adding a Content-Length.
+		if fl, ok := rw.(http.Flusher); ok {
+			fl.Flush()
+		}
+	}
 
 	// if fl, ok := rw.(http.Flusher); ok {
 	// 	fl.Flush()
 	// }
-	pbytes, err := ioutil.ReadAll(backendResp.Body)
-	if err != nil {
-		fmt.Printf("Error writing response: %s\n", err.Error())
+	f.copyResponse(rw, backendResp.Body)
+	backendResp.Body.Close()
+
+	for k, vv := range backendResp.Trailer {
+		for _, v := range vv {
+			rw.Header().Add(k, v)
+		}
 	}
-	_, err = rw.Write(pbytes)
-	if err != nil {
-		// TODO: How do we handle this case?
-		fmt.Printf("Error writing response: %s\n", err.Error())
-		return
-	}
+
+	// pbytes, err := ioutil.ReadAll(backendResp.Body)
+	// if err != nil {
+	// 	fmt.Printf("Error writing response: %s\n", err.Error())
+	// }
+	// _, err = rw.Write(pbytes)
+	// if err != nil {
+	// 	// TODO: How do we handle this case?
+	// 	fmt.Printf("Error writing response: %s\n", err.Error())
+	// return
+	// }
 	// fmt.Println("Finished req")
 	// fmt.Println("Finished writing resp bytes", string(pbytes))
 
@@ -345,6 +379,68 @@ func retryableError(err error) bool {
 	netErrString := err.Error()
 	return strings.Contains(netErrString, "dial")
 }
+
+//Until onExitFlushLoop the following is copied from golang release-candidate 1.7 reverse_proxy.go
+func (p *FastReverseProxy) copyResponse(dst io.Writer, src io.Reader) {
+	if wf, ok := dst.(writeFlusher); ok {
+		mlw := &maxLatencyWriter{
+			dst:     wf,
+			latency: 50 * time.Millisecond,
+			done:    make(chan bool),
+		}
+		go mlw.flushLoop()
+		defer mlw.stop()
+		dst = mlw
+	}
+
+	var buf []byte
+	_, err := io.CopyBuffer(dst, src, buf)
+	if err != nil {
+	}
+}
+
+type writeFlusher interface {
+	io.Writer
+	http.Flusher
+}
+
+type maxLatencyWriter struct {
+	dst     writeFlusher
+	latency time.Duration
+
+	mu   sync.Mutex // protects Write + Flush
+	done chan bool
+}
+
+func (m *maxLatencyWriter) Write(p []byte) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.dst.Write(p)
+}
+
+func (m *maxLatencyWriter) flushLoop() {
+	t := time.NewTicker(m.latency)
+	defer t.Stop()
+	for {
+		select {
+		case <-m.done:
+			if onExitFlushLoop != nil {
+				onExitFlushLoop()
+			}
+			return
+		case <-t.C:
+			m.mu.Lock()
+			m.dst.Flush()
+			m.mu.Unlock()
+		}
+	}
+}
+
+func (m *maxLatencyWriter) stop() { m.done <- true }
+
+// onExitFlushLoop is a callback set by tests to detect the state of the
+// flushLoop() goroutine.
+var onExitFlushLoop func()
 
 // func setupStickySession(responseWriter http.ResponseWriter, backendRespHeaders *fasthttp.ResponseHeader,
 // 	endpoint *route.Endpoint,

@@ -282,7 +282,7 @@ var _ = FDescribe("FastReverseProxy", func() {
 					for i := 0; i < 5; i++ {
 						fmt.Fprintf(w, "Chunk %d\n", i)
 						flusher.Flush()
-						time.Sleep(1000 * time.Millisecond)
+						time.Sleep(10 * time.Millisecond)
 					}
 				},
 			),
@@ -294,7 +294,9 @@ var _ = FDescribe("FastReverseProxy", func() {
 		Expect(resp.StatusCode).To(Equal(http.StatusOK))
 		Expect(resp.TransferEncoding).To(Equal([]string{"chunked"}))
 		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
-		Expect(nextCalled).To(BeTrue())
+		Eventually(func() bool {
+			return nextCalled
+		}).Should(BeTrue())
 	})
 
 	It("transparently returns trailers from the backend", func() {
@@ -314,6 +316,8 @@ var _ = FDescribe("FastReverseProxy", func() {
 
 		Expect(resp.StatusCode).To(Equal(http.StatusOK))
 		Expect(testServer.ReceivedRequests()).To(HaveLen(1))
+		ioutil.ReadAll(resp.Body)
+		fmt.Println(resp.Trailer)
 		Expect(resp.Trailer.Get("X-Foo-Trailer")).To(Equal("foo"))
 		Expect(nextCalled).To(BeTrue())
 	})
@@ -419,7 +423,7 @@ var _ = FDescribe("FastReverseProxy", func() {
 		})
 	})
 
-	FContext("when a connection attempt to a backend fails", func() {
+	Context("when a connection attempt to a backend fails", func() {
 		BeforeEach(func() {
 			pool := route.NewPool(1*time.Second, "")
 			badEndpoint1 := route.NewEndpoint("foo", "192.0.2.1", uint16(80), "", "", nil, -1, "", models.ModificationTag{})
