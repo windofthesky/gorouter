@@ -81,18 +81,16 @@ func NewFastReverseProxy(registry LookupRegistry, logger lager.Logger,
 }
 
 func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, next http.HandlerFunc) {
-	//	backendReq := fasthttp.AcquireRequest()
-	//	backendResp := fasthttp.AcquireResponse()
-	// defer fasthttp.ReleaseRequest(backendReq)
-	// defer fasthttp.ReleaseResponse(backendResp)
-
 	proxyWriter := rw.(utils.ProxyResponseWriter)
 	alr := proxyWriter.Context().Value("AccessLogRecord")
 	if alr == nil {
 		fmt.Println("AccessLogRecord not set on context", errors.New("failed-to-access-LogRecord"))
 	}
 	accessLog := alr.(*schema.AccessLogRecord)
-	handler := handler.NewRequestHandler(req, proxyWriter, f.reporter, accessLog, f.logger)
+
+	requestHandler := handler.AcquireHander()
+	defer handler.ReleaseHandler(requestHandler)
+	requestHandler.UpdateRequestHander(req, proxyWriter, f.reporter, accessLog, f.logger)
 
 	var closer io.ReadCloser
 	if req.Body != nil {
@@ -101,18 +99,12 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 		defer closer.Close()
 	}
 
-	backendReq := new(http.Request)
-	*backendReq = *req
-
-	//	closer, err := copyRequest(req, backendReq)
-	// if err != nil {
-	// 	fmt.Fprintf(rw, "Error parsing request: %s", err.Error())
-	// 	return
-	// }
+	backendReq := req
 
 	for _, h := range HopHeaders {
 		backendReq.Header.Del(h)
 	}
+
 	if clientIP, _, err := net.SplitHostPort(req.RemoteAddr); err == nil {
 		// If we aren't the first proxy retain prior
 		// X-Forwarded-For information as a comma+space
@@ -125,12 +117,9 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 		}
 		backendReq.Header.Set(xForwardedForKey, clientIPKey)
 	}
-	// else {
-	// 	fmt.Printf("got an error %s\n", err.Error())
-	// }
 
 	if !isProtocolSupported(req) {
-		handler.HandleUnsupportedProtocol()
+		requestHandler.HandleUnsupportedProtocol()
 		return
 	}
 
@@ -148,8 +137,7 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	uri := route.Uri(hostWithoutPort(req) + requestPath)
 	pool := f.registry.Lookup(uri)
 	if pool == nil {
-		//		fmt.Println("no route present")
-		handler.HandleMissingRoute()
+		requestHandler.HandleMissingRoute()
 		return
 	}
 
@@ -166,12 +154,12 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	}
 
 	if isTcpUpgrade(req) {
-		handler.HandleTcpRequest(iter)
+		requestHandler.HandleTcpRequest(iter)
 		return
 	}
 
 	if isWebSocketUpgrade(req) {
-		handler.HandleWebSocketRequest(iter)
+		requestHandler.HandleWebSocketRequest(iter)
 		return
 	}
 
@@ -179,7 +167,7 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	routeServiceUrl := pool.RouteServiceUrl()
 	// Attempted to use a route service when it is not supported
 	if routeServiceUrl != "" && !f.routeServiceConfig.RouteServiceEnabled() {
-		handler.HandleUnsupportedRouteService()
+		requestHandler.HandleUnsupportedRouteService()
 		return
 	}
 
@@ -201,7 +189,7 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 			routeServiceArgs.URLString = routeServiceUrl
 			err := f.routeServiceConfig.ValidateSignature(&req.Header, forwardedUrlRaw)
 			if err != nil {
-				handler.HandleBadSignature(err)
+				requestHandler.HandleBadSignature(err)
 				return
 			}
 			backendReq.Header.Del(routeservice.RouteServiceSignature)
@@ -213,7 +201,7 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 			routeServiceArgs, err = f.routeServiceConfig.Request(routeServiceUrl, forwardedUrlRaw)
 			backend = false
 			if err != nil {
-				handler.HandleRouteServiceFailure(err)
+				requestHandler.HandleRouteServiceFailure(err)
 				return
 			}
 			backendReq.Header.Set(routeservice.RouteServiceSignature, routeServiceArgs.Signature)
@@ -234,11 +222,6 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 		setupRequest(backendReq, endpoint)
 
 		iter.PreRequest(endpoint)
-
-		// fmt.Println("** REM")
-		// fmt.Println(req)
-		// fmt.Println(backendReq.String())
-
 		//		var hc fasthttp.HostClient
 		var hc http.Client
 		var netTransport = &http.Transport{
@@ -247,30 +230,15 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 			}).Dial,
 			TLSHandshakeTimeout: 5 * time.Second,
 			DisableKeepAlives:   true,
-			//	TLSConfig:           f.TLSConfig,
 		}
 		hc.Transport = netTransport
-		//	hc.Timeout = 5 * time.Second
-
-		// } else {
-		// 	fmt.Println("MAKING REQUEST TO ROUTE SERVICE")
-		// 	hc.Addr = routeServiceArgs.ParsedUrl.Host
-		// 	hc.IsTLS = routeServiceArgs.ParsedUrl.Scheme == "https"
-		// }
-		// timeout should be 1min / def timeout
-		//		fmt.Println("Performing request...")
 		setupProxyRequest(req, backendReq, false)
 		backendReq.RequestURI = ""
 
 		if backend {
 			backendReq.URL.Host = endpoint.CanonicalAddr()
-			// hc = endpoint.CanonicalAddr()
 		}
-		//		fmt.Println("backend host..", backendReq.Host)
 		backendResp, err = hc.Do(backendReq)
-		// err = hc.DoTimeout(backendReq, backendResp, f.endpointTimeout)
-		//	fmt.Println("Finished performing request...")
-		// fmt.Println("** REM request completed")
 
 		iter.PostRequest(endpoint)
 		if err != nil {
@@ -287,30 +255,18 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	}
 
 	if err != nil {
-		//	rw.WriteHeader(http.StatusBadGateway)
-		handler.HandleBadGateway(err, req)
+		requestHandler.HandleBadGateway(err, req)
 		rw.Write([]byte("Exceeded max retries: Timed out connecting to backends."))
 		return
 	}
 
-	//		accessLog.FirstByteAt = time.Now()
 	if backendResp != nil {
 		accessLog.StatusCode = backendResp.StatusCode
 	}
 
 	if f.traceKey != "" && endpoint != nil && req.Header.Get(router_http.VcapTraceHeader) == f.traceKey {
-		//fmt.Println("configured trace keys")
 		router_http.SetTraceHeaders(rw, f.ip, endpoint.CanonicalAddr())
 	}
-
-	//	latency := time.Since(accessLog.StartedAt)
-
-	//	f.reporter.CaptureRoutingResponse(endpoint, backendResp, accessLog.StartedAt, latency)
-
-	// if endpoint.PrivateInstanceId != "" {
-	// 	setupStickySession(rw, &backendResp.Header, endpoint,
-	// 		stickyEndpointId, f.secureCookies, pool.ContextPath())
-	// }
 
 	// TODO: add trailers?
 	for _, h := range HopHeaders {
@@ -345,9 +301,6 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 		}
 	}
 
-	// if fl, ok := rw.(http.Flusher); ok {
-	// 	fl.Flush()
-	// }
 	f.copyResponse(rw, backendResp.Body)
 	backendResp.Body.Close()
 
@@ -356,19 +309,6 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 			rw.Header().Add(k, v)
 		}
 	}
-
-	// pbytes, err := ioutil.ReadAll(backendResp.Body)
-	// if err != nil {
-	// 	fmt.Printf("Error writing response: %s\n", err.Error())
-	// }
-	// _, err = rw.Write(pbytes)
-	// if err != nil {
-	// 	// TODO: How do we handle this case?
-	// 	fmt.Printf("Error writing response: %s\n", err.Error())
-	// return
-	// }
-	// fmt.Println("Finished req")
-	// fmt.Println("Finished writing resp bytes", string(pbytes))
 
 	next(rw, req)
 

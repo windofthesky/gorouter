@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"code.cloudfoundry.org/gorouter/access_log/schema"
@@ -34,15 +35,27 @@ type RequestHandler struct {
 	response utils.ProxyResponseWriter
 }
 
-func NewRequestHandler(request *http.Request, response utils.ProxyResponseWriter, r reporter.ProxyReporter, alr *schema.AccessLogRecord, logger lager.Logger) *RequestHandler {
-	requestLogger := setupLogger(request, logger)
-	return &RequestHandler{
-		logger:    requestLogger,
-		reporter:  r,
-		logrecord: alr,
-		request:   request,
-		response:  response,
+var handlerPool sync.Pool
+
+func AcquireHander() *RequestHandler {
+	v := handlerPool.Get()
+	if v == nil {
+		return &RequestHandler{}
 	}
+	return v.(*RequestHandler)
+}
+
+func ReleaseHandler(h *RequestHandler) {
+	handlerPool.Put(h)
+}
+
+func (h *RequestHandler) UpdateRequestHander(request *http.Request, response utils.ProxyResponseWriter, r reporter.ProxyReporter, alr *schema.AccessLogRecord, logger lager.Logger) {
+	requestLogger := setupLogger(request, logger)
+	h.logger = requestLogger
+	h.reporter = r
+	h.logrecord = alr
+	h.request = request
+	h.response = response
 }
 
 func setupLogger(request *http.Request, logger lager.Logger) lager.Logger {
