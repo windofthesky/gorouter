@@ -37,7 +37,7 @@ type RequestHandler struct {
 
 var handlerPool sync.Pool
 
-func AcquireHander() *RequestHandler {
+func AcquireHandler() *RequestHandler {
 	v := handlerPool.Get()
 	if v == nil {
 		return &RequestHandler{}
@@ -49,7 +49,7 @@ func ReleaseHandler(h *RequestHandler) {
 	handlerPool.Put(h)
 }
 
-func (h *RequestHandler) UpdateRequestHander(request *http.Request, response utils.ProxyResponseWriter, r reporter.ProxyReporter, alr *schema.AccessLogRecord, logger lager.Logger) {
+func (h *RequestHandler) UpdateRequestHandler(request *http.Request, response utils.ProxyResponseWriter, r reporter.ProxyReporter, alr *schema.AccessLogRecord, logger lager.Logger) {
 	requestLogger := setupLogger(request, logger)
 	h.logger = requestLogger
 	h.reporter = r

@@ -88,9 +88,9 @@ func (f *FastReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request, 
 	}
 	accessLog := alr.(*schema.AccessLogRecord)
 
-	requestHandler := handler.AcquireHander()
+	requestHandler := handler.AcquireHandler()
 	defer handler.ReleaseHandler(requestHandler)
-	requestHandler.UpdateRequestHander(req, proxyWriter, f.reporter, accessLog, f.logger)
+	requestHandler.UpdateRequestHandler(req, proxyWriter, f.reporter, accessLog, f.logger)
 
 	var closer io.ReadCloser
 	if req.Body != nil {
