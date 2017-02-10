@@ -57,6 +57,11 @@ func (p *proxyWriterHandler) ServeHTTP(responseWriter http.ResponseWriter, reque
 	next(proxyWriter, request)
 }
 
+type backendFailureEntry struct {
+	failureCount int
+	retryAfter   time.Time
+}
+
 type proxy struct {
 	ip                       string
 	traceKey                 string
@@ -73,6 +78,8 @@ type proxy struct {
 	forceForwardedProtoHttps bool
 	defaultLoadBalance       string
 	bufferPool               httputil.BufferPool
+	backendFailureCache      map[string]*backendFailureEntry
+	failureCacheLock         *sync.Mutex
 }
 
 func NewProxy(
@@ -87,29 +94,12 @@ func NewProxy(
 ) Proxy {
 
 	p := &proxy{
-		accessLogger: accessLogger,
-		traceKey:     c.TraceKey,
-		ip:           c.Ip,
-		logger:       logger,
-		registry:     registry,
-		reporter:     reporter,
-		transport: &http.Transport{
-			Dial: func(network, addr string) (net.Conn, error) {
-				conn, err := net.DialTimeout(network, addr, 5*time.Second)
-				if err != nil {
-					return conn, err
-				}
-				if c.EndpointTimeout > 0 {
-					err = conn.SetDeadline(time.Now().Add(c.EndpointTimeout))
-				}
-				return conn, err
-			},
-			DisableKeepAlives:   c.DisableKeepAlives,
-			MaxIdleConns:        c.MaxIdleConns,
-			MaxIdleConnsPerHost: c.MaxIdleConnsPerHost,
-			DisableCompression:  true,
-			TLSClientConfig:     tlsConfig,
-		},
+		accessLogger:             accessLogger,
+		traceKey:                 c.TraceKey,
+		ip:                       c.Ip,
+		logger:                   logger,
+		registry:                 registry,
+		reporter:                 reporter,
 		secureCookies:            c.SecureCookies,
 		heartbeatOK:              heartbeatOK, // 1->true, 0->false
 		routeServiceConfig:       routeServiceConfig,
@@ -118,6 +108,30 @@ func NewProxy(
 		forceForwardedProtoHttps: c.ForceForwardedProtoHttps,
 		defaultLoadBalance:       c.LoadBalance,
 		bufferPool:               NewBufferPool(),
+		backendFailureCache:      make(map[string]*backendFailureEntry),
+		failureCacheLock:         new(sync.Mutex),
+	}
+
+	p.transport = &http.Transport{
+		Dial: func(network, addr string) (net.Conn, error) {
+			if p.shortCircuitBackendFailure(addr) {
+				return nil, errors.New("Refused to dial. Too many attempts.")
+			}
+			conn, err := net.DialTimeout(network, addr, 5*time.Second)
+			if err != nil {
+				p.recordBackendFailure(addr)
+				return conn, err
+			}
+			if c.EndpointTimeout > 0 {
+				err = conn.SetDeadline(time.Now().Add(c.EndpointTimeout))
+			}
+			return conn, err
+		},
+		DisableKeepAlives:   c.DisableKeepAlives,
+		MaxIdleConns:        c.MaxIdleConns,
+		MaxIdleConnsPerHost: c.MaxIdleConnsPerHost,
+		DisableCompression:  true,
+		TLSClientConfig:     tlsConfig,
 	}
 
 	n := negroni.New()
@@ -145,6 +159,31 @@ func hostWithoutPort(req *http.Request) string {
 	}
 
 	return host
+}
+
+func (p *proxy) shortCircuitBackendFailure(addr string) bool {
+	p.failureCacheLock.Lock()
+	defer p.failureCacheLock.Unlock()
+	entry, hasFailed := p.backendFailureCache[addr]
+	if hasFailed && entry.failureCount >= 3 {
+		if time.Now().After(entry.retryAfter) {
+			p.backendFailureCache[addr] = &backendFailureEntry{}
+		} else {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *proxy) recordBackendFailure(addr string) {
+	p.failureCacheLock.Lock()
+	defer p.failureCacheLock.Unlock()
+	_, hasFailed := p.backendFailureCache[addr]
+	if !hasFailed {
+		p.backendFailureCache[addr] = &backendFailureEntry{}
+	}
+	p.backendFailureCache[addr].failureCount += 1
+	p.backendFailureCache[addr].retryAfter = time.Now().Add(30 * time.Second)
 }
 
 func (p *proxy) getStickySession(request *http.Request) string {

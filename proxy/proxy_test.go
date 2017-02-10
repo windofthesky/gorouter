@@ -1185,6 +1185,61 @@ var _ = Describe("Proxy", func() {
 		Expect(err).NotTo(BeNil())
 	})
 
+	Context("dial timeouts", func() {
+		It("prevents dialing the backend after 3 dial errors", func() {
+			addr, err := net.ResolveTCPAddr("tcp", "10.255.255.1:80")
+			Expect(err).ToNot(HaveOccurred())
+			registerAddr(r, "slow-app", "", addr, "", "2", "")
+
+			conn := dialProxy(proxyServer)
+
+			req := test_util.NewRequest("GET", "slow-app", "/", nil)
+
+			started := time.Now()
+			conn.WriteRequest(req)
+
+			resp, _ := readResponse(conn)
+
+			Expect(resp.StatusCode).To(Equal(http.StatusBadGateway))
+			Expect(time.Since(started)).To(BeNumerically("~", 15*time.Second, 200*time.Millisecond))
+
+			started = time.Now()
+			conn.WriteRequest(req)
+
+			resp, _ = readResponse(conn)
+
+			Expect(resp.StatusCode).To(Equal(http.StatusBadGateway))
+			Expect(time.Since(started)).To(BeNumerically("<", 100*time.Millisecond))
+		})
+
+		It("prevents dialing the backend for only 30 seconds after 3 dial errors", func() {
+			addr, err := net.ResolveTCPAddr("tcp", "10.255.255.1:80")
+			Expect(err).ToNot(HaveOccurred())
+			registerAddr(r, "slow-app", "", addr, "", "2", "")
+
+			conn := dialProxy(proxyServer)
+
+			req := test_util.NewRequest("GET", "slow-app", "/", nil)
+
+			started := time.Now()
+			conn.WriteRequest(req)
+
+			resp, _ := readResponse(conn)
+
+			Expect(resp.StatusCode).To(Equal(http.StatusBadGateway))
+			Expect(time.Since(started)).To(BeNumerically("~", 15*time.Second, 100*time.Millisecond))
+
+			time.Sleep(30 * time.Second)
+			started = time.Now()
+			conn.WriteRequest(req)
+
+			resp, _ = readResponse(conn)
+
+			Expect(resp.StatusCode).To(Equal(http.StatusBadGateway))
+			Expect(time.Since(started)).To(BeNumerically("~", 15*time.Second, 100*time.Millisecond))
+		})
+	})
+
 	Context("respect client keepalives", func() {
 		It("closes the connection when told to close", func() {
 			ln := registerHandler(r, "remote", func(conn *test_util.HttpConn) {
