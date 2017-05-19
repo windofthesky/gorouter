@@ -66,6 +66,14 @@ type OAuthConfig struct {
 	CACerts           string `yaml:"ca_certs"`
 }
 
+type NetworkPolicyServerConfig struct {
+	Host             string `yaml:"policy_server_hostname"`
+	Port             int    `yaml:"policy_server_internal_listen_port"`
+	ClientCertFile   string `yaml:"vxlan_policy_agent_client_cert"`
+	ClientKeyFile    string `yaml:"vxlan_policy_agent_client_key"`
+	ServerCACertFile string `yaml:"vxlan_policy_agent_ca_cert"`
+}
+
 type LoggingConfig struct {
 	Syslog             string `yaml:"syslog"`
 	Level              string `yaml:"level"`
@@ -154,6 +162,8 @@ type Config struct {
 	DisableKeepAlives   bool `yaml:"disable_keep_alives"`
 	MaxIdleConns        int  `yaml:"max_idle_conns"`
 	MaxIdleConnsPerHost int  `yaml:"max_idle_conns_per_host"`
+
+	NetworkPolicyServer NetworkPolicyServerConfig `yaml:"cf_networking"`
 }
 
 var defaultConfig = Config{

@@ -3,6 +3,8 @@ package main
 import (
 	"crypto/tls"
 	"errors"
+	"io/ioutil"
+	"net/http"
 	"net/url"
 	"sync/atomic"
 
@@ -42,6 +44,9 @@ import (
 	"github.com/tedsuo/ifrit"
 	"github.com/tedsuo/ifrit/grouper"
 	"github.com/tedsuo/ifrit/sigmon"
+
+	"code.cloudfoundry.org/go-db-helpers/json_client"
+	"code.cloudfoundry.org/go-db-helpers/mutualtls"
 )
 
 var configFile string
@@ -97,6 +102,62 @@ func main() {
 	metricsReporter := metrics.NewMetricsReporter(sender, batcher)
 
 	var routingAPIClient routing_api.Client
+
+	clientCertFile, _ := ioutil.TempFile("", "clientCert")
+	clientCertFile.Write([]byte(c.NetworkPolicyServer.ClientCertFile))
+	clientCertFile.Close()
+	clientKeyFile, _ := ioutil.TempFile("", "clientKey")
+	clientKeyFile.Write([]byte(c.NetworkPolicyServer.ClientKeyFile))
+	clientKeyFile.Close()
+	serverCACertFile, _ := ioutil.TempFile("", "serverCACert")
+	serverCACertFile.Write([]byte(c.NetworkPolicyServer.ServerCACertFile))
+	serverCACertFile.Close()
+	clientTLSConfig, err := mutualtls.NewClientTLSConfig(
+		clientCertFile.Name(),
+		clientKeyFile.Name(),
+		serverCACertFile.Name())
+	if err != nil {
+		logger.Fatal("mutual tls config", zap.Error(err))
+	}
+
+	networkPolicyHTTPClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: clientTLSConfig,
+		},
+		Timeout: time.Duration(5) * time.Second,
+	}
+	policyClientLogger := lager.NewLogger("network-policy-client")
+	policyClientLogger.RegisterSink(lager.NewWriterSink(os.Stdout, lager.INFO))
+
+	policyClient := json_client.New(
+		policyClientLogger,
+		networkPolicyHTTPClient,
+		fmt.Sprintf("https://%s:%d", c.NetworkPolicyServer.Host, c.NetworkPolicyServer.Port),
+	)
+
+	type Source struct {
+		ID  string `json:"id"`
+		Tag string `json:"tag,omitempty"`
+	}
+
+	type Destination struct {
+		ID       string `json:"id"`
+		Port     int    `json:"port"`
+		Protocol string `json:"protocol"`
+	}
+	type Policy struct {
+		Source      Source      `json:"source"`
+		Destination Destination `json:"destination"`
+	}
+
+	var policies struct {
+		Policies []Policy `json:"policies"`
+	}
+	err = policyClient.Do("GET", "/networking/v0/internal/policies", nil, &policies, "")
+	if err != nil {
+		logger.Fatal("test-policy-client", zap.Error(err))
+	}
+	logger.Info("got-polices", zap.Object("policies", policies))
 
 	if c.RoutingApiEnabled() {
 		logger.Info("setting-up-routing-api")
