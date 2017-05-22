@@ -74,7 +74,7 @@ func NewPolicyClientConfig(networkPolicyServer config.NetworkPolicyServerConfig,
 			clientKeyFile.Name(),
 			serverCACertFile.Name())
 		if err != nil {
-			policyClientLogger.Fatal("mutual tls config", err)
+			zlogger.Fatal("failed-to-configure-mutual-tls", zap.Error(err))
 		}
 		return &PolicyClientConfig{
 			tlsConfig: clientTLSConfig,
