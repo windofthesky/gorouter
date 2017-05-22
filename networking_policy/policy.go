@@ -3,7 +3,6 @@ package networking_policy
 import (
 	"crypto/tls"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"time"
@@ -54,25 +53,11 @@ func NewPolicyClientConfig(networkPolicyServer config.NetworkPolicyServerConfig,
 	if (networkPolicyServer.ClientCertFile != "") &&
 		networkPolicyServer.ClientKeyFile != "" && networkPolicyServer.ServerCACertFile != "" {
 
-		clientCertFile, _ := ioutil.TempFile("", "clientCert")
-		_, err := clientCertFile.Write([]byte(networkPolicyServer.ClientCertFile))
-		if err != nil {
-			zlogger.Fatal("client-cert-file-write-error", zap.Error(err))
-		}
-		clientCertFile.Close()
-
-		clientKeyFile, _ := ioutil.TempFile("", "clientKey")
-		clientKeyFile.Write([]byte(networkPolicyServer.ClientKeyFile))
-		clientKeyFile.Close()
-
-		serverCACertFile, _ := ioutil.TempFile("", "serverCACert")
-		serverCACertFile.Write([]byte(networkPolicyServer.ServerCACertFile))
-		serverCACertFile.Close()
-
 		clientTLSConfig, err := mutualtls.NewClientTLSConfig(
-			clientCertFile.Name(),
-			clientKeyFile.Name(),
-			serverCACertFile.Name())
+			networkPolicyServer.ClientCertFile,
+			networkPolicyServer.ClientKeyFile,
+			networkPolicyServer.ServerCACertFile,
+		)
 		if err != nil {
 			zlogger.Fatal("failed-to-configure-mutual-tls", zap.Error(err))
 		}
