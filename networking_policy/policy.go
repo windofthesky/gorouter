@@ -71,6 +71,39 @@ func NewPolicyClientConfig(networkPolicyServer config.NetworkPolicyServerConfig,
 	return nil
 }
 
+type PolicyReg struct {
+	Id       string
+	Protocol string
+	Port     int
+}
+
+type Tag struct {
+	Tag string
+}
+
+func (p *PolicyClientConfig) Register(appId string) (Tag, error) {
+	networkPolicyHTTPClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: p.tlsConfig,
+		},
+		Timeout: time.Duration(5) * time.Second,
+	}
+	policyClient := json_client.New(
+		p.logger,
+		networkPolicyHTTPClient,
+		fmt.Sprintf("https://%s:%d", p.networkPolicyServerConfig.Host, p.networkPolicyServerConfig.Port),
+	)
+	policyRegistered := PolicyReg{Id: appId, Protocol: "tcp", Port: 8080}
+	var tag Tag
+	err := policyClient.Do("POST", "/networking/v0/internal/create-self-policy", policyRegistered, &tag, "")
+	if err != nil {
+		p.zlogger.Fatal("policy-client-error", zap.Error(err))
+		return tag, err
+	}
+	p.zlogger.Info("created-tag", zap.Object("tag", tag))
+	return tag, nil
+}
+
 // Runs the ifrit process
 func (p *PolicyClientConfig) Run(signals <-chan os.Signal, ready chan<- struct{}) error {
 	ticker := time.NewTicker(time.Millisecond * 500)

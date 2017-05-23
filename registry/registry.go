@@ -6,11 +6,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coreos/go-iptables/iptables"
 	"github.com/uber-go/zap"
 
 	"code.cloudfoundry.org/gorouter/config"
 	"code.cloudfoundry.org/gorouter/logger"
 	"code.cloudfoundry.org/gorouter/metrics"
+	"code.cloudfoundry.org/gorouter/networking_policy"
 	"code.cloudfoundry.org/gorouter/registry/container"
 	"code.cloudfoundry.org/gorouter/route"
 )
@@ -57,6 +59,7 @@ type RouteRegistry struct {
 
 	routingTableShardingMode string
 	isolationSegments        []string
+	policyClientConfig       *networking_policy.PolicyClientConfig
 }
 
 func NewRouteRegistry(logger logger.Logger, c *config.Config, reporter metrics.RouteRegistryReporter) *RouteRegistry {
@@ -72,7 +75,7 @@ func NewRouteRegistry(logger logger.Logger, c *config.Config, reporter metrics.R
 
 	r.routingTableShardingMode = c.RoutingTableShardingMode
 	r.isolationSegments = c.IsolationSegments
-
+	r.policyClientConfig = networking_policy.NewPolicyClientConfig(c.NetworkPolicyServer, logger)
 	return r
 }
 
@@ -94,8 +97,25 @@ func (r *RouteRegistry) Register(uri route.Uri, endpoint *route.Endpoint) {
 		r.byURI.Insert(routekey, pool)
 		r.logger.Debug("uri-added", zap.Stringer("uri", routekey))
 	}
+	restorer := &networking_policy.Restorer{}
+	ipt, err := iptables.New()
+	iptLocker := &networking_policy.IPTablesLocker{
+		FileLocker: &filelock.Locker{Path: conf.IPTablesLockFile},
+		Mutex:      &sync.Mutex{},
+	}
 
+	lockedIPTables := &networking_policy.LockedIPTables{
+		IPTables: ipt,
+		Locker:   iptLocker,
+		Restorer: restorer,
+	}
 	endpointAdded := pool.Put(endpoint)
+	tag, err := r.policyClientConfig.Register(endpoint.ApplicationId)
+	if err != nil {
+		r.logger.Error("failed-to-create-tag", zap.Error(err))
+	}
+
+	// POST JSON blob to add iptable rule
 
 	r.timeOfLastUpdate = t
 	r.Unlock()

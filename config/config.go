@@ -72,6 +72,7 @@ type NetworkPolicyServerConfig struct {
 	ClientCertFile   string `yaml:"vxlan_policy_agent_client_cert"`
 	ClientKeyFile    string `yaml:"vxlan_policy_agent_client_key"`
 	ServerCACertFile string `yaml:"vxlan_policy_agent_ca_cert"`
+	LockFile         string `yaml:"-"`
 }
 
 type LoggingConfig struct {
@@ -218,6 +219,7 @@ func (c *Config) Process() {
 	if c.StartResponseDelayInterval > c.DropletStaleThreshold {
 		c.DropletStaleThreshold = c.StartResponseDelayInterval
 	}
+	lockFileName, err := ioutil.TempFile("", "lockfile")
 
 	// To avoid routes getting purged because of unresponsive NATS server
 	// we need to set the ping interval of nats client such that it fails over
@@ -276,6 +278,7 @@ func (c *Config) Process() {
 	if c.RoutingTableShardingMode == SHARD_SEGMENTS && len(c.IsolationSegments) == 0 {
 		panic("Expected isolation segments; routing table sharding mode set to segments and none provided.")
 	}
+
 }
 
 func (c *Config) processCipherSuites() []uint16 {
