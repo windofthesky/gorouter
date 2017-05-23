@@ -40,7 +40,7 @@ var policies struct {
 type PolicyClientConfig struct {
 	networkPolicyServerConfig config.NetworkPolicyServerConfig
 	// using lager just for policy client
-	logger    lager.Logger
+	Logger    lager.Logger
 	tlsConfig *tls.Config
 	// use zlogger for all error and info logging
 	zlogger logger.Logger
@@ -63,7 +63,7 @@ func NewPolicyClientConfig(networkPolicyServer config.NetworkPolicyServerConfig,
 		}
 		return &PolicyClientConfig{
 			tlsConfig: clientTLSConfig,
-			logger:    policyClientLogger,
+			Logger:    policyClientLogger,
 			networkPolicyServerConfig: networkPolicyServer,
 			zlogger:                   zlogger,
 		}
@@ -81,7 +81,7 @@ type Tag struct {
 	Tag string
 }
 
-func (p *PolicyClientConfig) Register(appId string) (Tag, error) {
+func (p *PolicyClientConfig) Register(appId string) (string, error) {
 	networkPolicyHTTPClient := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: p.tlsConfig,
@@ -89,7 +89,7 @@ func (p *PolicyClientConfig) Register(appId string) (Tag, error) {
 		Timeout: time.Duration(5) * time.Second,
 	}
 	policyClient := json_client.New(
-		p.logger,
+		p.Logger,
 		networkPolicyHTTPClient,
 		fmt.Sprintf("https://%s:%d", p.networkPolicyServerConfig.Host, p.networkPolicyServerConfig.Port),
 	)
@@ -98,10 +98,10 @@ func (p *PolicyClientConfig) Register(appId string) (Tag, error) {
 	err := policyClient.Do("POST", "/networking/v0/internal/create-self-policy", policyRegistered, &tag, "")
 	if err != nil {
 		p.zlogger.Fatal("policy-client-error", zap.Error(err))
-		return tag, err
+		return "", err
 	}
 	p.zlogger.Info("created-tag", zap.Object("tag", tag))
-	return tag, nil
+	return tag.Tag, nil
 }
 
 // Runs the ifrit process
@@ -115,7 +115,7 @@ func (p *PolicyClientConfig) Run(signals <-chan os.Signal, ready chan<- struct{}
 		Timeout: time.Duration(5) * time.Second,
 	}
 	policyClient := json_client.New(
-		p.logger,
+		p.Logger,
 		networkPolicyHTTPClient,
 		fmt.Sprintf("https://%s:%d", p.networkPolicyServerConfig.Host, p.networkPolicyServerConfig.Port),
 	)

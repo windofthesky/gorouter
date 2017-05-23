@@ -220,7 +220,7 @@ func (c *Config) Process() {
 		c.DropletStaleThreshold = c.StartResponseDelayInterval
 	}
 	lockFileName, err := ioutil.TempFile("", "lockfile")
-
+	c.NetworkPolicyServer.LockFile = lockFileName.Name()
 	// To avoid routes getting purged because of unresponsive NATS server
 	// we need to set the ping interval of nats client such that it fails over
 	// to next NATS server before dropletstalethreshold is hit. We are hardcoding the ping interval
