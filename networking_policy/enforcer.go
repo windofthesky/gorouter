@@ -78,19 +78,21 @@ func (e *Enforcer) EnforceOnChain(c Chain, rules []IPTablesRule) error {
 }
 
 func (e *Enforcer) Enforce(table, parentChain, chainPrefix string, rulespec ...IPTablesRule) error {
-	newTime := e.timestamper.CurrentTime()
-	chain := fmt.Sprintf("%s%d", chainPrefix, newTime)
+	chain := fmt.Sprintf("%s%s", chainPrefix, "foo")
 
-	err := e.iptables.NewChain(table, chain)
+	_, err := e.iptables.List(table, chain)
 	if err != nil {
-		e.Logger.Error("create-chain", err)
-		return fmt.Errorf("creating chain: %s", err)
-	}
+		err := e.iptables.NewChain(table, chain)
+		if err != nil {
+			e.Logger.Error("create-chain", err)
+			return fmt.Errorf("creating chain: %s", err)
+		}
 
-	err = e.iptables.BulkInsert(table, parentChain, 1, IPTablesRule{"-j", chain})
-	if err != nil {
-		e.Logger.Error("insert-chain", err)
-		return fmt.Errorf("inserting chain: %s", err)
+		err = e.iptables.BulkInsert(table, parentChain, 1, IPTablesRule{"-j", chain})
+		if err != nil {
+			e.Logger.Error("insert-chain", err)
+			return fmt.Errorf("inserting chain: %s", err)
+		}
 	}
 
 	err = e.iptables.BulkAppend(table, chain, rulespec...)
@@ -98,11 +100,11 @@ func (e *Enforcer) Enforce(table, parentChain, chainPrefix string, rulespec ...I
 		return fmt.Errorf("bulk appending: %s", err)
 	}
 
-	err = e.cleanupOldRules(table, parentChain, chainPrefix, int(newTime))
-	if err != nil {
-		e.Logger.Error("cleanup-rules", err)
-		return err
-	}
+	// err = e.cleanupOldRules(table, parentChain, chainPrefix, int(newTime))
+	// if err != nil {
+	// 	e.Logger.Error("cleanup-rules", err)
+	// 	return err
+	// }
 
 	return nil
 }

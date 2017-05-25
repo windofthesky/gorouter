@@ -72,9 +72,8 @@ func NewPolicyClientConfig(networkPolicyServer config.NetworkPolicyServerConfig,
 }
 
 type PolicyReg struct {
-	Id       string
-	Protocol string
-	Port     int
+	Id   string
+	Port int
 }
 
 type Tag struct {
@@ -93,7 +92,7 @@ func (p *PolicyClientConfig) Register(appId string) (string, error) {
 		networkPolicyHTTPClient,
 		fmt.Sprintf("https://%s:%d", p.networkPolicyServerConfig.Host, p.networkPolicyServerConfig.Port),
 	)
-	policyRegistered := PolicyReg{Id: appId, Protocol: "tcp", Port: 8080}
+	policyRegistered := PolicyReg{Id: appId, Port: 8080}
 	var tag Tag
 	err := policyClient.Do("POST", "/networking/v0/internal/create-self-policy", policyRegistered, &tag, "")
 	if err != nil {

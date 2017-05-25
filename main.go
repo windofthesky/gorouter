@@ -15,6 +15,7 @@ import (
 	"code.cloudfoundry.org/gorouter/config"
 	goRouterLogger "code.cloudfoundry.org/gorouter/logger"
 	"code.cloudfoundry.org/gorouter/mbus"
+	"code.cloudfoundry.org/gorouter/networking_policy"
 	"code.cloudfoundry.org/gorouter/proxy"
 	rregistry "code.cloudfoundry.org/gorouter/registry"
 	"code.cloudfoundry.org/gorouter/route_fetcher"
@@ -142,10 +143,10 @@ func main() {
 		members = append(members, grouper.Member{Name: "router-fetcher", Runner: routeFetcher})
 	}
 
-	// networkPolicyFetcher := networking_policy.NewPolicyClientConfig(c.NetworkPolicyServer, logger.Session("network-policy-server"))
-	// if networkPolicyFetcher != nil {
-	// 	members = append(members, grouper.Member{Name: "policy-fetcher", Runner: networkPolicyFetcher})
-	// }
+	networkPolicyFetcher := networking_policy.NewPolicyClientConfig(c.NetworkPolicyServer, logger.Session("network-policy-server"))
+	if networkPolicyFetcher != nil {
+		members = append(members, grouper.Member{Name: "policy-fetcher", Runner: networkPolicyFetcher})
+	}
 	subscriber := createSubscriber(logger, c, natsClient, registry, startMsgChan)
 
 	members = append(members, grouper.Member{Name: "subscriber", Runner: subscriber})

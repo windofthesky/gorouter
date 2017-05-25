@@ -3,6 +3,7 @@ package registry
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -65,6 +66,7 @@ type RouteRegistry struct {
 	enforcer *networking_policy.Enforcer
 	chain    networking_policy.Chain
 	ruleMap  map[string]networking_policy.IPTablesRule
+	ipt      *iptables.IPTables
 }
 
 func NewRouteRegistry(logger logger.Logger, c *config.Config, reporter metrics.RouteRegistryReporter) *RouteRegistry {
@@ -84,7 +86,8 @@ func NewRouteRegistry(logger logger.Logger, c *config.Config, reporter metrics.R
 
 	// construct network policy obj
 	restorer := &networking_policy.Restorer{}
-	ipt, err := iptables.New()
+	var err error
+	r.ipt, err = iptables.New()
 	if err != nil {
 		logger.Error("failed-to-create-iptables", zap.Error(err))
 	}
@@ -93,7 +96,7 @@ func NewRouteRegistry(logger logger.Logger, c *config.Config, reporter metrics.R
 		Mutex:      &sync.Mutex{},
 	}
 	lockedIPTables := &networking_policy.LockedIPTables{
-		IPTables: ipt,
+		IPTables: r.ipt,
 		Locker:   iptLocker,
 		Restorer: restorer,
 	}
@@ -141,24 +144,51 @@ func (r *RouteRegistry) Register(uri route.Uri, endpoint *route.Endpoint) {
 	}
 	endpointAdded := pool.Put(endpoint)
 
+	// if endpoint has been added or updated
 	if endpointAdded {
-		tag, err := r.policyClientConfig.Register(endpoint.ApplicationId)
+		host, _, err := net.SplitHostPort(endpoint.CanonicalAddr())
 		if err != nil {
-			r.logger.Error("failed-to-create-tag", zap.Error(err))
+			r.logger.Error("failed-to-split-host-and-port", zap.Error(err))
 		}
-		//TODO: hash to keep track of all rules!
-		ipRule := networking_policy.NewEgressMarkRule(endpoint.CanonicalAddr(), tag)
-		//	appid+backendIP
-		r.ruleMap[fmt.Sprintf("%s+%s", endpoint.ApplicationId, endpoint.CanonicalAddr())] = ipRule
 
-		// map iterator to give list of all ip rules
-		rulesWithChain := networking_policy.RulesWithChain{
-			Chain: r.chain,
-			Rules: r.listAllRules(),
-		}
-		err = r.enforcer.EnforceRulesAndChain(rulesWithChain)
-		if err != nil {
-			r.logger.Error("endpoint-register-enforce-rules-error", zap.Error(err))
+		// do not create iptables rules for internal components - hardcoded for bosh-lite
+		internalComponent := strings.HasPrefix(host, "10.244.0")
+		if !internalComponent {
+			r.logger.Info("checking-if-iptables-rule-exists")
+			tag, err := r.policyClientConfig.Register(endpoint.ApplicationId)
+			if err != nil {
+				r.logger.Error("failed-to-create-tag", zap.Error(err))
+			}
+
+			ipRule := networking_policy.NewEgressMarkRule(host, tag)
+
+			// check if rule exists before adding
+			exists, err := r.ipt.Exists("filter", "marks--foo", ipRule...)
+			if err != nil {
+				r.logger.Error("iptables-exists-error", zap.Error(err))
+			}
+			if !exists {
+				list, err := r.ipt.List("filter", "marks--foo")
+				if err != nil {
+					r.logger.Error("iptables-retrieving-list-error", zap.Error(err))
+				}
+
+				r.logger.Info("RULE DOES NOT EXIST, CREATING RULE",
+					zap.Object("full-list", list),
+					zap.Object("searched-for", ipRule))
+				//	appid+backendIP
+				r.ruleMap[fmt.Sprintf("%s+%s", endpoint.ApplicationId, endpoint.CanonicalAddr())] = ipRule
+
+				// map iterator to give list of all ip rules
+				rulesWithChain := networking_policy.RulesWithChain{
+					Chain: r.chain,
+					Rules: r.listAllRules(),
+				}
+				err = r.enforcer.EnforceRulesAndChain(rulesWithChain)
+				if err != nil {
+					r.logger.Error("endpoint-register-enforce-rules-error", zap.Error(err))
+				}
+			}
 		}
 	}
 	r.timeOfLastUpdate = t
@@ -186,16 +216,10 @@ func (r *RouteRegistry) Unregister(uri route.Uri, endpoint *route.Endpoint) {
 	if pool != nil {
 		endpointRemoved := pool.Remove(endpoint)
 		if endpointRemoved {
+			rule := r.ruleMap[fmt.Sprintf("%s+%s", endpoint.ApplicationId, endpoint.CanonicalAddr())]
+			r.ipt.Delete("filter", "marks--foo", rule...)
 			delete(r.ruleMap, fmt.Sprintf("%s+%s", endpoint.ApplicationId, endpoint.CanonicalAddr()))
-
-			rulesWithChain := networking_policy.RulesWithChain{
-				Chain: r.chain,
-				Rules: r.listAllRules(),
-			}
-			err := r.enforcer.EnforceRulesAndChain(rulesWithChain)
-			if err != nil {
-				r.logger.Error("endpoint-unregister-enforce-rules-error", zap.Error(err))
-			}
+			// could also delete policy
 			r.logger.Debug("endpoint-unregistered", zapData(uri, endpoint)...)
 		} else {
 			r.logger.Debug("endpoint-not-unregistered", zapData(uri, endpoint)...)
@@ -353,16 +377,10 @@ func (r *RouteRegistry) pruneStaleDroplets() {
 			for _, e := range endpoints {
 				addresses = append(addresses, e.CanonicalAddr())
 
+				rule := r.ruleMap[fmt.Sprintf("%s+%s", e.ApplicationId, e.CanonicalAddr())]
+				r.ipt.Delete("filter", "marks--foo", rule...)
 				delete(r.ruleMap, fmt.Sprintf("%s+%s", e.ApplicationId, e.CanonicalAddr()))
-
-				rulesWithChain := networking_policy.RulesWithChain{
-					Chain: r.chain,
-					Rules: r.listAllRules(),
-				}
-				err := r.enforcer.EnforceRulesAndChain(rulesWithChain)
-				if err != nil {
-					r.logger.Error("endpoint-unregister-enforce-rules-error", zap.Error(err))
-				}
+				// could also delete policy
 			}
 			isolationSegment := endpoints[0].IsolationSegment
 			if isolationSegment == "" {
