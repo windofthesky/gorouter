@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"code.cloudfoundry.org/gorouter/logger"
@@ -80,7 +81,7 @@ type Tag struct {
 	Tag string
 }
 
-func (p *PolicyClientConfig) Register(appId string) (string, error) {
+func (p *PolicyClientConfig) Register(appId, port string) (string, error) {
 	networkPolicyHTTPClient := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: p.tlsConfig,
@@ -92,9 +93,13 @@ func (p *PolicyClientConfig) Register(appId string) (string, error) {
 		networkPolicyHTTPClient,
 		fmt.Sprintf("https://%s:%d", p.networkPolicyServerConfig.Host, p.networkPolicyServerConfig.Port),
 	)
-	policyRegistered := PolicyReg{Id: appId, Port: 8080}
+	portInt, err := strconv.Atoi(port)
+	if err != nil {
+		p.zlogger.Error("error parsing port in Register", zap.Error(err))
+	}
+	policyRegistered := PolicyReg{Id: appId, Port: portInt}
 	var tag Tag
-	err := policyClient.Do("POST", "/networking/v0/internal/create-self-policy", policyRegistered, &tag, "")
+	err = policyClient.Do("POST", "/networking/v0/internal/create-self-policy", policyRegistered, &tag, "")
 	if err != nil {
 		p.zlogger.Fatal("policy-client-error", zap.Error(err))
 		return "", err

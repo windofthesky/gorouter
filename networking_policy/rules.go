@@ -40,6 +40,12 @@ func NewEgressMarkRule(destinationIP string, tag string) IPTablesRule {
 	}
 }
 
+func NewAllowTrafficRule(destinationIP, jump string) IPTablesRule {
+	return IPTablesRule{
+		"-d", destinationIP, "-j", jump,
+	}
+}
+
 func NewMarkAllowRule(destinationIP, protocol string, port int, tag string, sourceAppGUID, destinationAppGUID string) IPTablesRule {
 	return AppendComment(IPTablesRule{
 		"-d", destinationIP,
