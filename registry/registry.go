@@ -226,8 +226,12 @@ func (r *RouteRegistry) Unregister(uri route.Uri, endpoint *route.Endpoint) {
 	pool := r.byURI.Find(uri)
 	if pool != nil {
 		endpointRemoved := pool.Remove(endpoint)
+		rule := r.ruleMap[fmt.Sprintf("%s+%s", endpoint.ApplicationId, endpoint.CanonicalAddr())]
+		err := r.ipt.Delete("filter", "marks--foo", rule...)
+		if err != nil {
+			r.logger.Error("iptables-delete-error", zap.Error(err))
+		}
 		if endpointRemoved {
-			rule := r.ruleMap[fmt.Sprintf("%s+%s", endpoint.ApplicationId, endpoint.CanonicalAddr())]
 			// ipt.Delete only deletes one entry of the rule, if duplicates exist then
 			// undesired artifacts could remain
 			err := r.ipt.Delete("filter", "marks--foo", rule...)

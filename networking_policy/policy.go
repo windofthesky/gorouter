@@ -101,7 +101,7 @@ func (p *PolicyClientConfig) Register(appId, port string) (string, error) {
 	var tag Tag
 	err = policyClient.Do("POST", "/networking/v0/internal/create-self-policy", policyRegistered, &tag, "")
 	if err != nil {
-		p.zlogger.Fatal("policy-client-error", zap.Error(err))
+		p.zlogger.Error("policy-client-error", zap.Error(err), zap.Object("data", policyRegistered))
 		return "", err
 	}
 	p.zlogger.Info("created-tag", zap.Object("tag", tag))
