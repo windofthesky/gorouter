@@ -158,37 +158,41 @@ func (r *RouteRegistry) Register(uri route.Uri, endpoint *route.Endpoint) {
 		}
 
 		// do not create iptables rules for internal components - hardcoded for bosh-lite
-		internalComponent := strings.HasPrefix(host, "10.244.0")
-		if !internalComponent {
+		internalComponent := strings.HasPrefix(host, "10.128")
+		// does the iptables mark get rotated?
+		ruleMapKey := fmt.Sprintf("%s+%s", endpoint.ApplicationId, endpoint.CanonicalAddr())
+		if !internalComponent && r.ruleMap[ruleMapKey] == nil {
 			r.logger.Info("checking-if-iptables-rule-exists")
 			_, port, err := net.SplitHostPort(endpoint.CanonicalAddr())
 			if err != nil {
-				r.logger.Error("register-parsing-url", zap.Error(err))
+				r.logger.Error("register-parsing-url", zap.Error(err), zap.Object("endpoint", endpoint))
+				return
 			}
 
 			tag, err := r.policyClientConfig.Register(endpoint.ApplicationId, port)
 			if err != nil {
-				r.logger.Error("failed-to-create-tag", zap.Error(err))
+				r.logger.Error("failed-to-create-tag", zap.Error(err), zap.Object("endpoint", endpoint))
+				return
 			}
-
 			ipRule := networking_policy.NewEgressMarkRule(host, tag)
 
 			// check if rule exists before adding - could be better to check in-memory map
 			exists, err := r.ipt.Exists("filter", "marks--foo", ipRule...)
 			if err != nil {
 				r.logger.Error("iptables-exists-error", zap.Error(err))
+				return
 			}
 			if !exists {
-				list, err := r.ipt.List("filter", "marks--foo")
-				if err != nil {
-					r.logger.Error("iptables-retrieving-list-error", zap.Error(err))
-				}
+				// list, err := r.ipt.List("filter", "marks--foo")
+				// if err != nil {
+				// 	r.logger.Error("iptables-retrieving-list-error", zap.Error(err))
+				// }
 
-				r.logger.Info("RULE DOES NOT EXIST, CREATING RULE",
-					zap.Object("full-list", list),
-					zap.Object("searched-for", ipRule))
+				// r.logger.Info("RULE DOES NOT EXIST, CREATING RULE",
+				// 	zap.Object("full-list", list),
+				// 	zap.Object("searched-for", ipRule))
 				//	appid+backendIP
-				r.ruleMap[fmt.Sprintf("%s+%s", endpoint.ApplicationId, endpoint.CanonicalAddr())] = ipRule
+				r.ruleMap[ruleMapKey] = ipRule
 
 				// map iterator to give list of all ip rules
 				rulesWithChain := networking_policy.RulesWithChain{
@@ -199,6 +203,7 @@ func (r *RouteRegistry) Register(uri route.Uri, endpoint *route.Endpoint) {
 				if err != nil {
 					r.logger.Error("endpoint-register-enforce-rules-error", zap.Error(err))
 				}
+				r.logger.Info("created-rule")
 			}
 		}
 	}
@@ -229,7 +234,7 @@ func (r *RouteRegistry) Unregister(uri route.Uri, endpoint *route.Endpoint) {
 		if endpointRemoved {
 			rule := r.ruleMap[fmt.Sprintf("%s+%s", endpoint.ApplicationId, endpoint.CanonicalAddr())]
 			// ipt.Delete only deletes one entry of the rule, if duplicates exist then
-			// undesired artifacts could remain
+			// undesired artifacts can remain
 			err := r.ipt.Delete("filter", "marks--foo", rule...)
 			if err != nil {
 				r.logger.Error("removing-rule-from-iptables-error", zap.Error(err))
@@ -396,7 +401,10 @@ func (r *RouteRegistry) pruneStaleDroplets() {
 				rule := r.ruleMap[fmt.Sprintf("%s+%s", e.ApplicationId, e.CanonicalAddr())]
 				err := r.ipt.Delete("filter", "marks--foo", rule...)
 				if err != nil {
-					r.logger.Error("removing-rule-from-iptables-error", zap.Error(err))
+					r.logger.Error("removing-rule-from-iptables-error",
+						zap.Error(err),
+						zap.Object("ruleMapKey", fmt.Sprintf("%s+%s", e.ApplicationId, e.CanonicalAddr())),
+						zap.Object("rule", rule))
 				}
 				delete(r.ruleMap, fmt.Sprintf("%s+%s", e.ApplicationId, e.CanonicalAddr()))
 				// could also delete policy
