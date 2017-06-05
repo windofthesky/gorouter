@@ -1,12 +1,21 @@
 package round_tripper
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/uber-go/zap"
@@ -34,6 +43,19 @@ type ProxyRoundTripper interface {
 
 type AfterRoundTrip func(req *http.Request, rsp *http.Response, endpoint *route.Endpoint, err error)
 
+type roundTripper struct {
+	transport          ProxyRoundTripper
+	logger             logger.Logger
+	traceKey           string
+	routerIP           string
+	defaultLoadBalance string
+	combinedReporter   metrics.CombinedReporter
+	secureCookies      bool
+	localPort          uint16
+	rootCACrt          *x509.Certificate
+	rootCAKey          *rsa.PrivateKey
+}
+
 func NewProxyRoundTripper(
 	transport ProxyRoundTripper,
 	logger logger.Logger,
@@ -44,7 +66,7 @@ func NewProxyRoundTripper(
 	secureCookies bool,
 	localPort uint16,
 ) ProxyRoundTripper {
-	return &roundTripper{
+	rt := &roundTripper{
 		logger:             logger,
 		transport:          transport,
 		traceKey:           traceKey,
@@ -54,17 +76,107 @@ func NewProxyRoundTripper(
 		secureCookies:      secureCookies,
 		localPort:          localPort,
 	}
+	cert, key := rt.rootCert()
+	rt.rootCACrt = cert
+	rt.rootCAKey = key
+	return rt
 }
 
-type roundTripper struct {
-	transport          ProxyRoundTripper
-	logger             logger.Logger
-	traceKey           string
-	routerIP           string
-	defaultLoadBalance string
-	combinedReporter   metrics.CombinedReporter
-	secureCookies      bool
-	localPort          uint16
+func (rt *roundTripper) rootCert() (*x509.Certificate, *rsa.PrivateKey) {
+	rootCAPath := os.Getenv("ROOT_CA")
+	if rootCAPath == "" {
+		rt.logger.Error("loading-root-CA-failed")
+	}
+	rootCrt, err := ioutil.ReadFile(filepath.Join(rootCAPath, "rootCa.crt"))
+	if err != nil {
+		rt.logger.Error("reading-root-crt-file", zap.Error(err))
+	}
+	rootkey, err := ioutil.ReadFile(filepath.Join(rootCAPath, "rootCa.key"))
+	if err != nil {
+		rt.logger.Error("reading-rootca-key-file", zap.Error(err))
+	}
+
+	crtBlock, _ := pem.Decode(rootCrt)
+	if crtBlock == nil {
+		rt.logger.Error("decoding-root-ca-pem-failed")
+	}
+	rootCrtPEM, err := x509.ParseCertificate(crtBlock.Bytes)
+	if err != nil {
+		rt.logger.Error("parsing-root-crt-pem-failed", zap.Error(err))
+	}
+
+	rootKeyPem, err := x509.ParsePKCS1PrivateKey(rootkey)
+	if err != nil {
+		rt.logger.Error("parsing-root-key-pem-failed", zap.Error(err))
+	}
+	return rootCrtPEM, rootKeyPem
+}
+
+func (rt *roundTripper) generateBackendTLS() *tls.Config {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		rt.logger.Error("generating-backend-private-key-error", zap.Error(err))
+	}
+	backendCertTmpl, err := CertTemplate()
+	if err != nil {
+		rt.logger.Error("creating-backend-cert-template-error", zap.Error(err))
+	}
+	backendCertTmpl.KeyUsage = x509.KeyUsageDigitalSignature
+	backendCertTmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+	backendCertTmpl.IPAddresses = []net.IP{net.ParseIP("127.0.0.1")} // for NOW we can hardcode to localhost
+
+	_, backEndCrtPem, err := CreateCert(backendCertTmpl, rt.rootCACrt, &key.PublicKey, rt.rootCAKey)
+	if err != nil {
+		rt.logger.Error("creating-backend-cert-PEM-error", zap.Error(err))
+	}
+
+	backEndKeyPem := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+	backEndTLSCert, err := tls.X509KeyPair(backEndCrtPem, backEndKeyPem)
+	if err != nil {
+		rt.logger.Error("creating-TLS-cert-error", zap.Error(err))
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{backEndTLSCert},
+	}
+}
+
+func CreateCert(template, parent *x509.Certificate, pub, parentPriv interface{}) (cert *x509.Certificate, certPEM []byte, err error) {
+	certDER, err := x509.CreateCertificate(rand.Reader, template, parent, pub, parentPriv)
+	if err != nil {
+		return
+	}
+	cert, err = x509.ParseCertificate(certDER)
+	if err != nil {
+		return
+	}
+	//PEM encoded cert (standard TLS encoding)
+	b := pem.Block{Type: "CERTIFICATE", Bytes: certDER}
+	certPEM = pem.EncodeToMemory(&b)
+	return
+}
+
+// helper func to crate cert template with a serial number and other fields
+func CertTemplate() (*x509.Certificate, error) {
+	// generate a random serial number (a real cert authority would have some logic behind this)
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		return nil, err
+	}
+
+	tmpl := x509.Certificate{
+		SerialNumber:          serialNumber,
+		Subject:               pkix.Name{Organization: []string{"Ninoski, Inc."}},
+		SignatureAlgorithm:    x509.SHA256WithRSA,
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(time.Hour), // valid for an hour
+		BasicConstraintsValid: true,
+	}
+	return &tmpl, nil
+
 }
 
 func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -104,6 +216,27 @@ func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error)
 			if err != nil {
 				break
 			}
+
+			_, port, err := net.SplitHostPort(endpoint.CanonicalAddr())
+			if err != nil {
+				logger.Error("spliting-CanonicalAddr-failed", zap.Error(err))
+			}
+			if port == "7777" {
+				logger.Info("making-back-end-tls-connection")
+				tlsConfig := rt.generateBackendTLS()
+				caCertPool := x509.NewCertPool()
+				caCertPool.AddCert(rt.rootCACrt)
+				tlsConfig.RootCAs = caCertPool
+				tlsTransport := &http.Transport{TLSClientConfig: tlsConfig}
+				client := http.Client{Transport: tlsTransport}
+				res, err := client.Get("https://" + endpoint.CanonicalAddr())
+				if err != nil {
+					logger.Error("backend-tls-connection-failed", zap.Error(err))
+				}
+				return res, nil
+
+			}
+
 			logger = logger.With(zap.Nest("route-endpoint", endpoint.ToLogData()...))
 			res, err = rt.backendRoundTrip(request, endpoint, iter)
 			if err == nil || !retryableError(err) {
@@ -117,7 +250,7 @@ func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error)
 				zap.Object("route-service-url", reqInfo.RouteServiceURL),
 				zap.Int("attempt", retry),
 			)
-
+			// TODO: confirm if the endpoint port is the tls_port & use round trip wrapped in TLS???
 			endpoint = newRouteServiceEndpoint()
 			request.Host = reqInfo.RouteServiceURL.Host
 			request.URL = new(url.URL)
