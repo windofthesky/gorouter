@@ -1,16 +1,13 @@
 package round_tripper
 
 import (
-	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"io/ioutil"
-	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -98,85 +95,22 @@ func (rt *roundTripper) rootCert() (*x509.Certificate, *rsa.PrivateKey) {
 
 	crtBlock, _ := pem.Decode(rootCrt)
 	if crtBlock == nil {
-		rt.logger.Error("decoding-root-ca-pem-failed")
+		rt.logger.Error("decoding-root-crt-pem-failed")
 	}
 	rootCrtPEM, err := x509.ParseCertificate(crtBlock.Bytes)
 	if err != nil {
 		rt.logger.Error("parsing-root-crt-pem-failed", zap.Error(err))
 	}
 
-	rootKeyPem, err := x509.ParsePKCS1PrivateKey(rootkey)
+	keyBlock, _ := pem.Decode(rootkey)
+	if keyBlock == nil {
+		rt.logger.Error("decoding-root-key-pem-failed")
+	}
+	rootKeyPem, err := x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
 	if err != nil {
 		rt.logger.Error("parsing-root-key-pem-failed", zap.Error(err))
 	}
 	return rootCrtPEM, rootKeyPem
-}
-
-func (rt *roundTripper) generateBackendTLS() *tls.Config {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		rt.logger.Error("generating-backend-private-key-error", zap.Error(err))
-	}
-	backendCertTmpl, err := CertTemplate()
-	if err != nil {
-		rt.logger.Error("creating-backend-cert-template-error", zap.Error(err))
-	}
-	backendCertTmpl.KeyUsage = x509.KeyUsageDigitalSignature
-	backendCertTmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
-	backendCertTmpl.IPAddresses = []net.IP{net.ParseIP("127.0.0.1")} // for NOW we can hardcode to localhost
-
-	_, backEndCrtPem, err := CreateCert(backendCertTmpl, rt.rootCACrt, &key.PublicKey, rt.rootCAKey)
-	if err != nil {
-		rt.logger.Error("creating-backend-cert-PEM-error", zap.Error(err))
-	}
-
-	backEndKeyPem := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	})
-	backEndTLSCert, err := tls.X509KeyPair(backEndCrtPem, backEndKeyPem)
-	if err != nil {
-		rt.logger.Error("creating-TLS-cert-error", zap.Error(err))
-	}
-	return &tls.Config{
-		Certificates: []tls.Certificate{backEndTLSCert},
-	}
-}
-
-func CreateCert(template, parent *x509.Certificate, pub, parentPriv interface{}) (cert *x509.Certificate, certPEM []byte, err error) {
-	certDER, err := x509.CreateCertificate(rand.Reader, template, parent, pub, parentPriv)
-	if err != nil {
-		return
-	}
-	cert, err = x509.ParseCertificate(certDER)
-	if err != nil {
-		return
-	}
-	//PEM encoded cert (standard TLS encoding)
-	b := pem.Block{Type: "CERTIFICATE", Bytes: certDER}
-	certPEM = pem.EncodeToMemory(&b)
-	return
-}
-
-// helper func to crate cert template with a serial number and other fields
-func CertTemplate() (*x509.Certificate, error) {
-	// generate a random serial number (a real cert authority would have some logic behind this)
-	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
-	if err != nil {
-		return nil, err
-	}
-
-	tmpl := x509.Certificate{
-		SerialNumber:          serialNumber,
-		Subject:               pkix.Name{Organization: []string{"Ninoski, Inc."}},
-		SignatureAlgorithm:    x509.SHA256WithRSA,
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(time.Hour), // valid for an hour
-		BasicConstraintsValid: true,
-	}
-	return &tmpl, nil
-
 }
 
 func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -223,18 +157,69 @@ func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error)
 			}
 			if port == "7777" {
 				logger.Info("making-back-end-tls-connection")
-				tlsConfig := rt.generateBackendTLS()
 				caCertPool := x509.NewCertPool()
 				caCertPool.AddCert(rt.rootCACrt)
-				tlsConfig.RootCAs = caCertPool
-				tlsTransport := &http.Transport{TLSClientConfig: tlsConfig}
-				client := http.Client{Transport: tlsTransport}
-				res, err := client.Get("https://" + endpoint.CanonicalAddr())
-				if err != nil {
-					logger.Error("backend-tls-connection-failed", zap.Error(err))
-				}
-				return res, nil
 
+				tlsConfig := &tls.Config{
+					RootCAs: caCertPool,
+				}
+
+				dialBackend := func(network string, addr string) (net.Conn, error) {
+					conn, err := tls.Dial("tcp", endpoint.CanonicalAddr(), tlsConfig)
+					//validate appGuid
+					if err != nil {
+						rt.logger.Error("connection to backend tls failed :%v", zap.Error(err))
+					}
+					return net.Conn(conn), err
+				}
+				transport := &http.Transport{
+					DialTLS:         dialBackend,
+					TLSClientConfig: tlsConfig,
+				}
+
+				//// TODO: in the actual implementaion we need to change canonicalAddr to include tls_port
+				//conn, err := tls.Dial("tcp", endpoint.CanonicalAddr(), tlsConfig)
+				////verify appGuid
+				//
+				//if err != nil {
+				//	rt.logger.Error("connection to backend tls failed :%v", zap.Error(err))
+				//	rt.logger.Error("connection to backend tls failed :%v", zap.Error(err))
+				//}
+				//connState := conn.ConnectionState()
+				//for _, cert := range connState.PeerCertificates {
+				//
+				//	log.Printf("Found common name in cert %s", cert.Subject.CommonName)
+				//	//crtBlock := pem.Block{
+				//	//	Type:  "CERTIFICATE",
+				//	//	Bytes: cert.Raw,
+				//	//}
+				//	//certPem := pem.EncodeToMemory(&crtBlock)
+				//	//log.Println(string(certPem))
+				//
+				//}
+
+				//body, err := ioutil.ReadAll(request.Body)
+				//	if err != nil {
+				//		rt.logger.Error("reading request body for backend tls failed :%v", zap.Error(err))
+				//	}
+
+				//tlsConn.Write(body)
+
+				//buff := make([]byte, 256)
+				//_, err = tlsConn.Read(buff)
+				//if err != nil {
+				//	rt.logger.Error("reading response body for backend tls failed :%v", zap.Error(err))
+				//	}
+
+				//rt.logger.Info(string(buff))
+
+				request.URL.Host = endpoint.CanonicalAddr()
+				request.Header.Set("X-CF-ApplicationID", endpoint.ApplicationId)
+				request.Header.Set("X-CF-InstanceIndex", endpoint.PrivateInstanceIndex)
+				res, err := transport.RoundTrip(request)
+				bodyBytes, err := ioutil.ReadAll(res.Body)
+				rt.logger.Info(string(bodyBytes))
+				return res, err
 			}
 
 			logger = logger.With(zap.Nest("route-endpoint", endpoint.ToLogData()...))
