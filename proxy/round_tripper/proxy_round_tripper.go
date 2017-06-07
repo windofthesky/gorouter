@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -141,6 +142,18 @@ func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error)
 	stickyEndpointID := getStickySession(request)
 	iter := reqInfo.RoutePool.Endpoints(rt.defaultLoadBalance, stickyEndpointID)
 
+	verifyBackEnd := func(conn *tls.Conn) error {
+		connState := conn.ConnectionState()
+		for _, cert := range connState.PeerCertificates {
+			cn := cert.Subject.CommonName
+			log.Printf("Found common name in cert %s", cn)
+			// this does not have to be app guid
+			if cn != "appGuid123" {
+				return errors.New("Failed to verify backEnd")
+			}
+		}
+		return nil
+	}
 	logger := rt.logger
 	for retry := 0; retry < handler.MaxRetries; retry++ {
 
@@ -155,6 +168,8 @@ func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error)
 			if err != nil {
 				logger.Error("spliting-CanonicalAddr-failed", zap.Error(err))
 			}
+
+			//verify tls_port
 			if port == "7777" {
 				logger.Info("making-back-end-tls-connection")
 				caCertPool := x509.NewCertPool()
@@ -164,62 +179,19 @@ func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error)
 					RootCAs: caCertPool,
 				}
 
-				dialBackend := func(network string, addr string) (net.Conn, error) {
-					conn, err := tls.Dial("tcp", endpoint.CanonicalAddr(), tlsConfig)
-					//validate appGuid
-					if err != nil {
-						rt.logger.Error("connection to backend tls failed :%v", zap.Error(err))
-					}
-					return net.Conn(conn), err
+				// call the app on it's TLS endpoint
+				// Ideally this connection should get re-used
+				// need to figure out how transition tls.Conn to transport Roundtrip
+				conn, err := tls.Dial("tcp", "127.0.0.1:4443", tlsConfig)
+				if err != nil {
+					rt.logger.Error("connection to backend tls failed :%v", zap.Error(err))
 				}
-				transport := &http.Transport{
-					DialTLS:         dialBackend,
-					TLSClientConfig: tlsConfig,
+				defer conn.Close()
+				if err := verifyBackEnd(conn); err != nil {
+					// try another endpiont
+					break
 				}
 
-				//// TODO: in the actual implementaion we need to change canonicalAddr to include tls_port
-				//conn, err := tls.Dial("tcp", endpoint.CanonicalAddr(), tlsConfig)
-				////verify appGuid
-				//
-				//if err != nil {
-				//	rt.logger.Error("connection to backend tls failed :%v", zap.Error(err))
-				//	rt.logger.Error("connection to backend tls failed :%v", zap.Error(err))
-				//}
-				//connState := conn.ConnectionState()
-				//for _, cert := range connState.PeerCertificates {
-				//
-				//	log.Printf("Found common name in cert %s", cert.Subject.CommonName)
-				//	//crtBlock := pem.Block{
-				//	//	Type:  "CERTIFICATE",
-				//	//	Bytes: cert.Raw,
-				//	//}
-				//	//certPem := pem.EncodeToMemory(&crtBlock)
-				//	//log.Println(string(certPem))
-				//
-				//}
-
-				//body, err := ioutil.ReadAll(request.Body)
-				//	if err != nil {
-				//		rt.logger.Error("reading request body for backend tls failed :%v", zap.Error(err))
-				//	}
-
-				//tlsConn.Write(body)
-
-				//buff := make([]byte, 256)
-				//_, err = tlsConn.Read(buff)
-				//if err != nil {
-				//	rt.logger.Error("reading response body for backend tls failed :%v", zap.Error(err))
-				//	}
-
-				//rt.logger.Info(string(buff))
-
-				request.URL.Host = endpoint.CanonicalAddr()
-				request.Header.Set("X-CF-ApplicationID", endpoint.ApplicationId)
-				request.Header.Set("X-CF-InstanceIndex", endpoint.PrivateInstanceIndex)
-				res, err := transport.RoundTrip(request)
-				bodyBytes, err := ioutil.ReadAll(res.Body)
-				rt.logger.Info(string(bodyBytes))
-				return res, err
 			}
 
 			logger = logger.With(zap.Nest("route-endpoint", endpoint.ToLogData()...))
