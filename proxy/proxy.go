@@ -48,6 +48,8 @@ type proxy struct {
 	forceForwardedProtoHttps bool
 	defaultLoadBalance       string
 	bufferPool               httputil.BufferPool
+	config                   *config.Config
+	tlsConfig                *tls.Config
 }
 
 func NewProxy(
@@ -74,26 +76,11 @@ func NewProxy(
 		forceForwardedProtoHttps: c.ForceForwardedProtoHttps,
 		defaultLoadBalance:       c.LoadBalance,
 		bufferPool:               NewBufferPool(),
+		config:                   c,
+		tlsConfig:                tlsConfig,
 	}
 
-	httpTransport := &http.Transport{
-		Dial: func(network, addr string) (net.Conn, error) {
-			conn, err := net.DialTimeout(network, addr, 5*time.Second)
-			if err != nil {
-				return conn, err
-			}
-			if c.EndpointTimeout > 0 {
-				err = conn.SetDeadline(time.Now().Add(c.EndpointTimeout))
-			}
-			return conn, err
-		},
-		DisableKeepAlives:   c.DisableKeepAlives,
-		MaxIdleConns:        c.MaxIdleConns,
-		IdleConnTimeout:     90 * time.Second, // setting the value to golang default transport
-		MaxIdleConnsPerHost: c.MaxIdleConnsPerHost,
-		DisableCompression:  true,
-		TLSClientConfig:     tlsConfig,
-	}
+	httpTransport := p.createBackendTransport("")
 
 	rproxy := &ReverseProxy{
 		Director:       p.setupProxyRequest,
@@ -122,6 +109,29 @@ func NewProxy(
 	return n
 }
 
+func (p *proxy) createBackendTransport(srvname string) *http.Transport {
+	tlsconfig := *p.tlsConfig
+	tlsconfig.ServerName = srvname
+	return &http.Transport{
+		Dial: func(network, addr string) (net.Conn, error) {
+			conn, err := net.DialTimeout(network, addr, 5*time.Second)
+			if err != nil {
+				return conn, err
+			}
+			if p.config.EndpointTimeout > 0 {
+				err = conn.SetDeadline(time.Now().Add(p.config.EndpointTimeout))
+			}
+			return conn, err
+		},
+		DisableKeepAlives:   p.config.DisableKeepAlives,
+		MaxIdleConns:        p.config.MaxIdleConns,
+		IdleConnTimeout:     90 * time.Second, // setting the value to golang default transport
+		MaxIdleConnsPerHost: p.config.MaxIdleConnsPerHost,
+		DisableCompression:  true,
+		TLSClientConfig:     &tlsconfig,
+	}
+}
+
 func hostWithoutPort(req *http.Request) string {
 	host := req.Host
 
@@ -136,6 +146,7 @@ func hostWithoutPort(req *http.Request) string {
 
 func (p *proxy) proxyRoundTripper(transport round_tripper.ProxyRoundTripper, port uint16) round_tripper.ProxyRoundTripper {
 	return round_tripper.NewProxyRoundTripper(
+		p.createBackendTransport,
 		round_tripper.NewDropsondeRoundTripper(transport),
 		p.logger, p.traceKey, p.ip, p.defaultLoadBalance,
 		p.reporter, p.secureCookies,

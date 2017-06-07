@@ -2,8 +2,11 @@ package main
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"io/ioutil"
 	"net/url"
+	"path/filepath"
 	"sync/atomic"
 
 	"code.cloudfoundry.org/clock"
@@ -179,10 +182,17 @@ func buildProxy(logger goRouterLogger.Logger, c *config.Config, registry rregist
 		cryptoPrev,
 		c.RouteServiceRecommendHttps,
 	)
-
+	rootCAFile := os.Getenv("ROOT_CA")
+	rootCertPEM, err := ioutil.ReadFile(filepath.Join(rootCAFile, "rootCa.crt"))
+	if err != nil {
+		panic("rootca")
+	}
+	certPool := x509.NewCertPool()
+	certPool.AppendCertsFromPEM(rootCertPEM)
 	tlsConfig := &tls.Config{
 		CipherSuites:       c.CipherSuites,
 		InsecureSkipVerify: c.SkipSSLValidation,
+		RootCAs:            certPool,
 	}
 
 	return proxy.NewProxy(logger, accessLogger, c, registry,

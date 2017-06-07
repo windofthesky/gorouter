@@ -34,7 +34,21 @@ type ProxyRoundTripper interface {
 
 type AfterRoundTrip func(req *http.Request, rsp *http.Response, endpoint *route.Endpoint, err error)
 
+type roundTripper struct {
+	transport          ProxyRoundTripper
+	logger             logger.Logger
+	traceKey           string
+	routerIP           string
+	defaultLoadBalance string
+	combinedReporter   metrics.CombinedReporter
+	secureCookies      bool
+	localPort          uint16
+	tlsBackends        map[string]*http.Transport
+	transportFactory   func(string) *http.Transport
+}
+
 func NewProxyRoundTripper(
+	transportFactory func(string) *http.Transport,
 	transport ProxyRoundTripper,
 	logger logger.Logger,
 	traceKey string,
@@ -53,18 +67,9 @@ func NewProxyRoundTripper(
 		combinedReporter:   combinedReporter,
 		secureCookies:      secureCookies,
 		localPort:          localPort,
+		tlsBackends:        make(map[string]*http.Transport),
+		transportFactory:   transportFactory,
 	}
-}
-
-type roundTripper struct {
-	transport          ProxyRoundTripper
-	logger             logger.Logger
-	traceKey           string
-	routerIP           string
-	defaultLoadBalance string
-	combinedReporter   metrics.CombinedReporter
-	secureCookies      bool
-	localPort          uint16
 }
 
 func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -105,7 +110,29 @@ func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error)
 				break
 			}
 			logger = logger.With(zap.Nest("route-endpoint", endpoint.ToLogData()...))
-			res, err = rt.backendRoundTrip(request, endpoint, iter)
+
+			_, port, err := net.SplitHostPort(endpoint.CanonicalAddr())
+			if err != nil {
+				rt.logger.Error("error spliting CanonicalAddr", zap.Error(err))
+			}
+			// verify tls_port
+			if port == "7777" {
+				var (
+					tr    *http.Transport
+					exist bool
+				)
+				tr, exist = rt.tlsBackends[endpoint.ApplicationId]
+				if !exist {
+					rt.logger.Info("TLS verification against", zap.String("applicationID", endpoint.ApplicationId))
+					tr = rt.transportFactory(endpoint.ApplicationId)
+					rt.tlsBackends[endpoint.ApplicationId] = tr
+				}
+				request.URL.Scheme = "https"
+				res, err = rt.backendRoundTrip(tr, request, endpoint, iter)
+			} else {
+				res, err = rt.backendRoundTrip(rt.transport, request, endpoint, iter)
+			}
+
 			if err == nil || !retryableError(err) {
 				break
 			}
@@ -189,6 +216,7 @@ func (rt *roundTripper) CancelRequest(request *http.Request) {
 }
 
 func (rt *roundTripper) backendRoundTrip(
+	transport ProxyRoundTripper,
 	request *http.Request,
 	endpoint *route.Endpoint,
 	iter route.EndpointIterator,
@@ -202,7 +230,7 @@ func (rt *roundTripper) backendRoundTrip(
 	iter.PreRequest(endpoint)
 
 	rt.combinedReporter.CaptureRoutingRequest(endpoint)
-	res, err := rt.transport.RoundTrip(request)
+	res, err := transport.RoundTrip(request)
 
 	// decrement connection stats
 	iter.PostRequest(endpoint)
