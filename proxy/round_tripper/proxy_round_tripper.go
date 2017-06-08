@@ -111,12 +111,8 @@ func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error)
 			}
 			logger = logger.With(zap.Nest("route-endpoint", endpoint.ToLogData()...))
 
-			_, port, err := net.SplitHostPort(endpoint.CanonicalAddr())
-			if err != nil {
-				rt.logger.Error("error spliting CanonicalAddr", zap.Error(err))
-			}
 			// verify tls_port
-			if port == "7777" {
+			if endpoint.TLS {
 				var (
 					tr    *http.Transport
 					exist bool

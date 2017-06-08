@@ -24,6 +24,7 @@ type RegistryMessage struct {
 	Uris                    []route.Uri       `json:"uris"`
 	Tags                    map[string]string `json:"tags"`
 	App                     string            `json:"app"`
+	TLS                     bool              `json:"tls"`
 	StaleThresholdInSeconds int               `json:"stale_threshold_in_seconds"`
 	RouteServiceURL         string            `json:"route_service_url"`
 	PrivateInstanceID       string            `json:"private_instance_id"`
@@ -36,6 +37,7 @@ func (rm *RegistryMessage) makeEndpoint() *route.Endpoint {
 		rm.App,
 		rm.Host,
 		rm.Port,
+		rm.TLS,
 		rm.PrivateInstanceID,
 		rm.PrivateInstanceIndex,
 		rm.Tags,

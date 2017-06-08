@@ -43,6 +43,7 @@ func NewStats() *Stats {
 
 type Endpoint struct {
 	ApplicationId        string
+	TLS                  bool
 	addr                 string
 	Tags                 map[string]string
 	PrivateInstanceId    string
@@ -85,6 +86,7 @@ func NewEndpoint(
 	appId,
 	host string,
 	port uint16,
+	tls bool,
 	privateInstanceId string,
 	privateInstanceIndex string,
 	tags map[string]string,
@@ -95,6 +97,7 @@ func NewEndpoint(
 ) *Endpoint {
 	return &Endpoint{
 		ApplicationId:        appId,
+		TLS:                  tls,
 		addr:                 fmt.Sprintf("%s:%d", host, port),
 		Tags:                 tags,
 		PrivateInstanceId:    privateInstanceId,

@@ -182,10 +182,10 @@ func buildProxy(logger goRouterLogger.Logger, c *config.Config, registry rregist
 		cryptoPrev,
 		c.RouteServiceRecommendHttps,
 	)
-	rootCAFile := os.Getenv("ROOT_CA")
-	rootCertPEM, err := ioutil.ReadFile(filepath.Join(rootCAFile, "rootCa.crt"))
+	rootCAFile := "/var/vcap/packages/gorouter/src/code.cloudfoundry.org/gorouter/certs"
+	rootCertPEM, err := ioutil.ReadFile(filepath.Join(rootCAFile, "server-ca.crt"))
 	if err != nil {
-		panic("rootca")
+		panic(err.Error())
 	}
 	certPool := x509.NewCertPool()
 	certPool.AppendCertsFromPEM(rootCertPEM)
