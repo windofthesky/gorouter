@@ -137,6 +137,7 @@ type Config struct {
 	RouteServiceSecret         string           `yaml:"route_services_secret"`
 	RouteServiceSecretPrev     string           `yaml:"route_services_secret_decrypt_only"`
 	RouteServiceRecommendHttps bool             `yaml:"route_services_recommend_https"`
+	ClientKeepAlive            bool             `yaml:"client_keep_alive"`
 	// These fields are populated by the `Process` function.
 	Ip                     string        `yaml:"-"`
 	RouteServiceEnabled    bool          `yaml:"-"`
@@ -161,13 +162,13 @@ var defaultConfig = Config{
 	Nats:    []NatsConfig{defaultNatsConfig},
 	Logging: defaultLoggingConfig,
 
-	Port:        8081,
-	Index:       0,
-	GoMaxProcs:  -1,
-	EnablePROXY: false,
-	EnableSSL:   false,
-	SSLPort:     443,
-
+	Port:                8081,
+	Index:               0,
+	GoMaxProcs:          -1,
+	EnablePROXY:         false,
+	EnableSSL:           false,
+	SSLPort:             443,
+	ClientKeepAlive:     false,
 	EndpointTimeout:     60 * time.Second,
 	RouteServiceTimeout: 60 * time.Second,
 

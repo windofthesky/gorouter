@@ -14,12 +14,14 @@ const (
 )
 
 type setVcapRequestIdHeader struct {
-	logger logger.Logger
+	logger          logger.Logger
+	clientKeepAlive bool
 }
 
-func NewsetVcapRequestIdHeader(logger logger.Logger) negroni.Handler {
+func NewsetVcapRequestIdHeader(logger logger.Logger, clientKeepAlive bool) negroni.Handler {
 	return &setVcapRequestIdHeader{
-		logger: logger,
+		logger:          logger,
+		clientKeepAlive: clientKeepAlive,
 	}
 }
 
@@ -34,6 +36,10 @@ func (s *setVcapRequestIdHeader) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 	} else {
 		s.logger.Error("failed-to-set-vcap-request-id-header", zap.Error(err))
 	}
-
+	s.logger.Info("in requestID with keepAlive", zap.Bool("keep-alive", s.clientKeepAlive))
+	if !s.clientKeepAlive {
+		s.logger.Error("setting connection closed !!!!!!!!!!!!!!!!!!!!!")
+		rw.Header().Set("Connection", "close")
+	}
 	next(rw, r)
 }
