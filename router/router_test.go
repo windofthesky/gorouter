@@ -46,6 +46,7 @@ import (
 var _ = Describe("Router", func() {
 
 	const uuid_regex = `^[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$`
+	const append_uuid_regex = `something::[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$`
 
 	var (
 		natsRunner *test_util.NATSRunner
@@ -398,6 +399,49 @@ var _ = Describe("Router", func() {
 		var rr *http.Request
 		Eventually(rCh).Should(Receive(&rr))
 		Expect(rr).ToNot(BeNil())
+	})
+
+	FIt("X-Vcap-Request-Id header is appended", func() {
+		done := make(chan string)
+		app := testcommon.NewTestApp([]route.Uri{"foo.vcap.me"}, config.Port, mbusClient, nil, "")
+		app.AddHandler("/", func(w http.ResponseWriter, r *http.Request) {
+			reqId := r.Header.Get(handlers.VcapRequestIdHeader)
+			newHeader := fmt.Sprintf("%s::something_id", reqId)
+			w.Header().Add(handlers.VcapRequestIdHeader, newHeader)
+			w.WriteHeader(http.StatusOK)
+			reqHeaders := r.Header[handlers.VcapRequestIdHeader]
+			for _, ele := range reqHeaders {
+				done <- ele
+			}
+		})
+
+		app.Listen()
+		time.Sleep(2 * time.Second)
+		go app.RegisterRepeatedly(2 * time.Second)
+
+		Eventually(func() bool {
+			return appRegistered(registry, app)
+		}).Should(BeTrue())
+
+		conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", config.Ip, config.Port))
+		Expect(err).NotTo(HaveOccurred())
+		defer conn.Close()
+
+		httpConn := test_util.NewHttpConn(conn)
+
+		req := test_util.NewRequest("GET", "foo.vcap.me", "/", nil)
+		httpConn.WriteRequest(req)
+
+		var answer string
+		Eventually(done).Should(Receive(&answer))
+		resp, _ := httpConn.ReadResponse()
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+		headerList := resp.Header[handlers.VcapRequestIdHeader]
+		Expect(len(headerList)).To(Equal(2))
+		Expect(headerList[0]).To(MatchRegexp(uuid_regex))
+		Expect(headerList[0]).To(Equal(answer))
+		newanswer := fmt.Sprintf("%s::something_id", answer)
+		Expect(headerList[1]).To(Equal(newanswer))
 	})
 
 	It("X-Vcap-Request-Id header is overwritten", func() {
