@@ -192,6 +192,7 @@ func buildProxy(logger goRouterLogger.Logger, c *config.Config, registry rregist
 	tlsConfig := &tls.Config{
 		CipherSuites:       c.CipherSuites,
 		InsecureSkipVerify: c.SkipSSLValidation,
+		ClientSessionCache: tls.NewLRUClientSessionCache(100),
 		RootCAs:            certPool,
 	}
 
