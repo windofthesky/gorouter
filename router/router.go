@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -238,10 +239,22 @@ func (r *Router) DrainAndStop() {
 
 func (r *Router) serveHTTPS(server *http.Server, errChan chan error) error {
 	if r.config.EnableSSL {
+		rootCAs, err := x509.SystemCertPool()
+		if err != nil {
+			rootCAs = nil
+		}
+		if err == nil {
+			for _, cert := range r.config.MTLSRootCAs {
+				rootCAs.AddCert(cert)
+			}
+		}
+
 		tlsConfig := &tls.Config{
 			Certificates: []tls.Certificate{r.config.SSLCertificate},
 			CipherSuites: r.config.CipherSuites,
 			MinVersion:   tls.VersionTLS12,
+			ClientCAs:    rootCAs,
+			ClientAuth:   tls.VerifyClientCertIfGiven,
 		}
 
 		listener, err := net.Listen("tcp", fmt.Sprintf(":%d", r.config.SSLPort))

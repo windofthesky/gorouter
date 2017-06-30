@@ -3,10 +3,16 @@ package router_test
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io/ioutil"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -886,8 +892,179 @@ var _ = Describe("Router", func() {
 			resp.Body.Close()
 		})
 
+		Context("when a client provides a certificate", func() {
+			var (
+				rootCert *x509.Certificate
+				rootKey  *rsa.PrivateKey
+			)
+
+			BeforeEach(func() {
+				var err error
+				rootCert, rootKey, err = createRootCA()
+				Expect(err).ToNot(HaveOccurred())
+				config.MTLSRootCAs = []*x509.Certificate{
+					rootCert,
+				}
+			})
+
+			It("fails the connection if the certificate is invalid", func() {
+				badRootCert, badRootKey, err := createRootCA()
+				Expect(err).ToNot(HaveOccurred())
+				clientCert, err := createClientCert(badRootCert, badRootKey)
+				Expect(err).ToNot(HaveOccurred())
+
+				app := test.NewGreetApp([]route.Uri{"test.vcap.me"}, config.Port, mbusClient, nil)
+				app.Listen()
+				Eventually(func() bool {
+					return appRegistered(registry, app)
+				}).Should(BeTrue())
+
+				uri := fmt.Sprintf("https://test.vcap.me:%d/", config.SSLPort)
+				req, _ := http.NewRequest("GET", uri, nil)
+				tr := &http.Transport{
+					TLSClientConfig: &tls.Config{
+						InsecureSkipVerify: true,
+						Certificates: []tls.Certificate{
+							*clientCert,
+						},
+					},
+				}
+
+				client := http.Client{Transport: tr}
+
+				resp, err := client.Do(req)
+				Expect(err).To(HaveOccurred())
+				Expect(resp).To(BeNil())
+			})
+
+			It("successfully serves SSL traffic if the certificate is valid", func() {
+				clientCert, err := createClientCert(rootCert, rootKey)
+				Expect(err).ToNot(HaveOccurred())
+
+				app := test.NewGreetApp([]route.Uri{"test.vcap.me"}, config.Port, mbusClient, nil)
+				app.Listen()
+				Eventually(func() bool {
+					return appRegistered(registry, app)
+				}).Should(BeTrue())
+
+				uri := fmt.Sprintf("https://test.vcap.me:%d/", config.SSLPort)
+				req, _ := http.NewRequest("GET", uri, nil)
+				tr := &http.Transport{
+					TLSClientConfig: &tls.Config{
+						InsecureSkipVerify: true,
+						Certificates: []tls.Certificate{
+							*clientCert,
+						},
+					},
+				}
+
+				client := http.Client{Transport: tr}
+
+				resp, err := client.Do(req)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(resp).ToNot(BeNil())
+
+				Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+				bytes, err := ioutil.ReadAll(resp.Body)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(bytes).To(ContainSubstring("Hello"))
+				defer resp.Body.Close()
+			})
+		})
 	})
 })
+
+func createClientCert(rootCert *x509.Certificate, rootKey *rsa.PrivateKey) (*tls.Certificate, error) {
+	// generate a key pair for the client
+	clientKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, err
+	}
+	clientCertTmpl, err := certTemplate()
+	if err != nil {
+		return nil, err
+	}
+	clientCertTmpl.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature
+	clientCertTmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+	clientCertTmpl.IPAddresses = []net.IP{net.ParseIP("127.0.0.1")}
+
+	// create a certificate which wraps the server's public key, sign it with the root private key
+	// pretending rootCert belongs to CA
+	_, clientCertPEM, err := createCert(clientCertTmpl, rootCert, &clientKey.PublicKey, rootKey)
+	if err != nil {
+		return nil, err
+	}
+	// provide the private key and the cert
+	clientKeyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(clientKey),
+	})
+	clientCert, err := tls.X509KeyPair(clientCertPEM, clientKeyPEM)
+	if err != nil {
+		return nil, err
+	}
+	return &clientCert, nil
+
+}
+
+func createRootCA() (*x509.Certificate, *rsa.PrivateKey, error) {
+	rootKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	rootCertTmpl, err := certTemplate()
+	if err != nil {
+		return nil, nil, err
+	}
+	rootCertTmpl.IsCA = true
+	rootCertTmpl.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature
+	rootCertTmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
+	rootCertTmpl.IPAddresses = []net.IP{net.ParseIP("127.0.0.1")}
+
+	rootCert, _, err := createCert(rootCertTmpl, rootCertTmpl, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	return rootCert, rootKey, err
+}
+
+func createCert(template, parent *x509.Certificate, pub, parentPriv interface{}) (cert *x509.Certificate, certPEM []byte, err error) {
+	certDER, err := x509.CreateCertificate(rand.Reader, template, parent, pub, parentPriv)
+	if err != nil {
+		return
+	}
+	cert, err = x509.ParseCertificate(certDER)
+	if err != nil {
+		return
+	}
+	//PEM encoded cert (standard TLS encoding)
+	b := pem.Block{Type: "CERTIFICATE", Bytes: certDER}
+	certPEM = pem.EncodeToMemory(&b)
+	return
+}
+
+// helper func to crate cert template with a serial number and other fields
+func certTemplate() (*x509.Certificate, error) {
+	// generate a random serial number (a real cert authority would have some logic behind this)
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		return nil, err
+	}
+
+	tmpl := x509.Certificate{
+		SerialNumber:          serialNumber,
+		Subject:               pkix.Name{Organization: []string{"Ninoski, Inc."}},
+		SignatureAlgorithm:    x509.SHA256WithRSA,
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(time.Hour), // valid for an hour
+		BasicConstraintsValid: true,
+	}
+	return &tmpl, nil
+
+}
 
 func initializeRouter(config *cfg.Config, registry *rregistry.RouteRegistry, varz vvarz.Varz, mbusClient *nats.Conn, logger logger.Logger) (*Router, error) {
 	sender := new(fakeMetrics.MetricSender)

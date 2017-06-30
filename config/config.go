@@ -2,6 +2,7 @@ package config
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net/url"
 
@@ -109,6 +110,7 @@ type Config struct {
 	SSLCertPath              string        `yaml:"ssl_cert_path"`
 	SSLKeyPath               string        `yaml:"ssl_key_path"`
 	SSLCertificate           tls.Certificate
+	MTLSRootCAs              []*x509.Certificate
 	SkipSSLValidation        bool     `yaml:"skip_ssl_validation"`
 	ForceForwardedProtoHttps bool     `yaml:"force_forwarded_proto_https"`
 	IsolationSegments        []string `yaml:"isolation_segments"`
