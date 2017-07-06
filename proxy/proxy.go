@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"net"
@@ -77,7 +78,7 @@ func NewProxy(
 	}
 
 	httpTransport := &http.Transport{
-		Dial: func(network, addr string) (net.Conn, error) {
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			conn, err := net.DialTimeout(network, addr, 5*time.Second)
 			if err != nil {
 				return conn, err
@@ -85,6 +86,18 @@ func NewProxy(
 			if c.EndpointTimeout > 0 {
 				err = conn.SetDeadline(time.Now().Add(c.EndpointTimeout))
 			}
+			go func() error {
+				for {
+					if err != nil {
+						return err
+					}
+					select {
+					case <-ctx.Done():
+						conn.Close()
+						return ctx.Err()
+					}
+				}
+			}()
 			return conn, err
 		},
 		DisableKeepAlives:   c.DisableKeepAlives,
