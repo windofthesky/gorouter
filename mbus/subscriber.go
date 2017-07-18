@@ -13,6 +13,8 @@ import (
 	"code.cloudfoundry.org/localip"
 	"code.cloudfoundry.org/routing-api/models"
 
+	"sync"
+
 	"github.com/nats-io/nats"
 	"github.com/uber-go/zap"
 )
@@ -58,6 +60,7 @@ type Subscriber struct {
 	startMsgChan  <-chan struct{}
 	opts          *SubscriberOpts
 	routeRegistry registry.Registry
+	msgBufferPool *sync.Pool
 }
 
 // SubscriberOpts contains configuration for Subscriber struct
@@ -81,6 +84,7 @@ func NewSubscriber(
 		routeRegistry: routeRegistry,
 		startMsgChan:  startMsgChan,
 		opts:          opts,
+		msgBufferPool: new(sync.Pool),
 	}
 }
 
@@ -127,7 +131,13 @@ func (s *Subscriber) subscribeToGreetMessage() error {
 
 func (s *Subscriber) subscribeRoutes() error {
 	natsSubscriber, err := s.natsClient.Subscribe("router.*", func(message *nats.Msg) {
-		msg, regErr := createRegistryMessage(message.Data)
+		buf := s.msgBufferPool.Get()
+		msg, ok := buf.(*RegistryMessage)
+		if !ok {
+			msg = new(RegistryMessage)
+		}
+		defer s.msgBufferPool.Put(msg)
+		regErr := createRegistryMessage(message.Data, msg)
 		if regErr != nil {
 			s.logger.Error("validation-error",
 				zap.Error(regErr),
@@ -194,17 +204,16 @@ func (s *Subscriber) sendStartMessage() error {
 	return s.natsClient.Publish("router.start", message)
 }
 
-func createRegistryMessage(data []byte) (*RegistryMessage, error) {
-	var msg RegistryMessage
+func createRegistryMessage(data []byte, msg *RegistryMessage) error {
 
-	jsonErr := json.Unmarshal(data, &msg)
+	jsonErr := json.Unmarshal(data, msg)
 	if jsonErr != nil {
-		return nil, jsonErr
+		return jsonErr
 	}
 
 	if !msg.ValidateMessage() {
-		return nil, errors.New("Unable to validate message. route_service_url must be https")
+		return errors.New("Unable to validate message. route_service_url must be https")
 	}
 
-	return &msg, nil
+	return nil
 }
