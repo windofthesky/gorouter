@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/base64"
+	"encoding/pem"
 	"net/http"
 	"strings"
 
@@ -25,8 +26,12 @@ func (c *clientCert) ServeHTTP(rw http.ResponseWriter, r *http.Request, next htt
 }
 
 func sanitizeHeader(r *http.Request) {
-	for _, cert := range r.TLS.PeerCertificates {
-		r.Header.Add(xfcc, sanitize(cert.Raw))
+	// we only care about the first cert at this moment
+	if len(r.TLS.PeerCertificates) > 0 {
+		cert := r.TLS.PeerCertificates[0]
+		b := pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}
+		certPEM := pem.EncodeToMemory(&b)
+		r.Header.Add(xfcc, sanitize(certPEM))
 	}
 }
 

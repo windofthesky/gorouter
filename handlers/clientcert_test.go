@@ -109,16 +109,16 @@ var _ = Describe("Clientcert", func() {
 		It("sanitizes the xfcc headers from the request", func() {
 			privKey, certDER := test_util.CreateCertDER("client_cert1.com")
 
-			key, cert := test_util.CreateKeyPairFromDER(certDER, privKey)
+			keyPEM, certPEM := test_util.CreateKeyPairFromDER(certDER, privKey)
 
-			tlsCert, err := tls.X509KeyPair(cert, key)
+			tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
 			Expect(err).ToNot(HaveOccurred())
 
-			c1, err := x509.ParseCertificate(certDER)
+			x509Cert, err := x509.ParseCertificate(certDER)
 			Expect(err).ToNot(HaveOccurred())
 
 			certPool := x509.NewCertPool()
-			certPool.AddCert(c1)
+			certPool.AddCert(x509Cert)
 
 			servertlsConfig := &tls.Config{
 				Certificates: []tls.Certificate{tlsCert},
@@ -152,58 +152,9 @@ var _ = Describe("Clientcert", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			headerCerts := nextReq.Header["X-Forwarded-Client-Cert"]
-			Expect(headerCerts).To(ConsistOf(encodeBase64(c1.Raw)))
-
+			Expect(headerCerts).To(ConsistOf(encodeBase64(certPEM)))
 		})
 	})
-
-	Context("when sanitizing header", func() {
-		It("adds the client cert chain", func() {
-			certChain := test_util.CreateSignedCertWithRootCA("foo")
-
-			leaf, err := x509.ParseCertificate(certChain.CertDER)
-			Expect(err).ToNot(HaveOccurred())
-			rootCA, err := x509.ParseCertificate(certChain.CACertDER)
-			Expect(err).ToNot(HaveOccurred())
-
-			req := &http.Request{
-				TLS: &tls.ConnectionState{
-					PeerCertificates: []*x509.Certificate{
-						leaf, rootCA,
-					},
-				},
-				Header: make(http.Header),
-			}
-			rw := httptest.NewRecorder()
-			clientCertHandler.ServeHTTP(rw, req, nextHandler)
-			headerCerts := nextReq.Header["X-Forwarded-Client-Cert"]
-			Expect(headerCerts).To(ConsistOf(encodeBase64(leaf.Raw), encodeBase64(rootCA.Raw)))
-		})
-
-		It("respects the order of certificate chain", func() {
-			certChain := test_util.CreateSignedCertWithRootCA("foo")
-
-			leaf, err := x509.ParseCertificate(certChain.CertDER)
-			Expect(err).ToNot(HaveOccurred())
-			rootCA, err := x509.ParseCertificate(certChain.CACertDER)
-			Expect(err).ToNot(HaveOccurred())
-
-			req := &http.Request{
-				TLS: &tls.ConnectionState{
-					PeerCertificates: []*x509.Certificate{
-						leaf, rootCA,
-					},
-				},
-				Header: make(http.Header),
-			}
-			rw := httptest.NewRecorder()
-			clientCertHandler.ServeHTTP(rw, req, nextHandler)
-			headerCerts := nextReq.Header["X-Forwarded-Client-Cert"]
-			Expect(headerCerts[0]).To(Equal(encodeBase64(leaf.Raw)))
-			Expect(headerCerts[1]).To(Equal(encodeBase64(rootCA.Raw)))
-		})
-	})
-
 })
 
 func encodeBase64(cert []byte) string {
