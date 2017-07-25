@@ -43,7 +43,7 @@ var _ = Describe("Lookup", func() {
 		reg = &fakeRegistry.FakeRegistry{}
 		handler = negroni.New()
 		handler.Use(handlers.NewRequestInfo())
-		handler.Use(handlers.NewLookup(reg, rep, logger))
+		handler.Use(handlers.NewLookup(reg, rep, logger, 2))
 		handler.UseHandler(nextHandler)
 
 		req = test_util.NewRequest("GET", "example.com", "/", nil)
@@ -83,6 +83,80 @@ var _ = Describe("Lookup", func() {
 
 		JustBeforeEach(func() {
 			handler.ServeHTTP(resp, req)
+		})
+
+		Context("when conn limit is reached for an endpoint", func() {
+			BeforeEach(func() {
+				pool = route.NewPool(2*time.Minute, "example.com")
+				endpointStats := &route.Stats{
+					NumberConnections: &route.Counter{},
+				}
+				testEndpoint := &route.Endpoint{
+					ApplicationId: "testid",
+					Tags:          make(map[string]string),
+					Stats:         endpointStats,
+				}
+				testEndpoint.Stats.NumberConnections.Increment()
+				testEndpoint.Stats.NumberConnections.Increment()
+				testEndpoint.Stats.NumberConnections.Increment()
+				pool.Put(testEndpoint)
+				testEndpoint1 := &route.Endpoint{
+					ApplicationId: "testid2",
+					Tags:          make(map[string]string),
+					Stats:         route.NewStats(),
+				}
+				pool.Put(testEndpoint1)
+				reg.LookupReturns(pool)
+			})
+
+			It("does not include the overloaded backend in the pool", func() {
+				Expect(nextCalled).To(BeTrue())
+				requestInfo, err := handlers.ContextRequestInfo(nextRequest)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(requestInfo.RoutePool.IsEmpty()).To(BeFalse())
+				len := 0
+				var expectedAppId string
+				requestInfo.RoutePool.Each(func(endpoint *route.Endpoint) {
+					expectedAppId = endpoint.ApplicationId
+					len++
+				})
+				Expect(len).To(Equal(1))
+				Expect(expectedAppId).To(Equal("testid2"))
+				Expect(resp.Code).NotTo(Equal(http.StatusServiceUnavailable))
+			})
+		})
+
+		Context("when conn limit is reached for all requested endpoint", func() {
+			BeforeEach(func() {
+				pool = route.NewPool(2*time.Minute, "example.com")
+				endpointStats := &route.Stats{
+					NumberConnections: &route.Counter{},
+				}
+				testEndpoint := &route.Endpoint{
+					ApplicationId: "testid",
+					Tags:          make(map[string]string),
+					Stats:         endpointStats,
+				}
+				testEndpoint.Stats.NumberConnections.Increment()
+				testEndpoint.Stats.NumberConnections.Increment()
+				testEndpoint.Stats.NumberConnections.Increment()
+				pool.Put(testEndpoint)
+				testEndpoint1 := &route.Endpoint{
+					ApplicationId: "testid2",
+					Tags:          make(map[string]string),
+					Stats:         route.NewStats(),
+				}
+				testEndpoint1.Stats.NumberConnections.Increment()
+				testEndpoint1.Stats.NumberConnections.Increment()
+				testEndpoint1.Stats.NumberConnections.Increment()
+				pool.Put(testEndpoint1)
+				reg.LookupReturns(pool)
+			})
+
+			It("returns a 503", func() {
+				Expect(nextCalled).To(BeFalse())
+				Expect(resp.Code).To(Equal(http.StatusServiceUnavailable))
+			})
 		})
 
 		It("calls next with the pool", func() {
@@ -161,7 +235,7 @@ var _ = Describe("Lookup", func() {
 		Context("when request info is not set on the request context", func() {
 			BeforeEach(func() {
 				handler = negroni.New()
-				handler.Use(handlers.NewLookup(reg, rep, logger))
+				handler.Use(handlers.NewLookup(reg, rep, logger, 0))
 				handler.UseHandler(nextHandler)
 			})
 			It("calls Fatal on the logger", func() {

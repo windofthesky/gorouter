@@ -68,6 +68,10 @@ type OAuthConfig struct {
 	CACerts           string `yaml:"ca_certs"`
 }
 
+type BackendConfig struct {
+	MaxConns int `yaml:"max_conns"`
+}
+
 type LoggingConfig struct {
 	Syslog             string `yaml:"syslog"`
 	Level              string `yaml:"level"`
@@ -145,8 +149,8 @@ type Config struct {
 	Ip                     string        `yaml:"-"`
 	RouteServiceEnabled    bool          `yaml:"-"`
 	NatsClientPingInterval time.Duration `yaml:"-"`
-
-	ExtraHeadersToLog []string `yaml:"extra_headers_to_log"`
+	Backends               BackendConfig `yaml:"backends"`
+	ExtraHeadersToLog      []string      `yaml:"extra_headers_to_log"`
 
 	TokenFetcherMaxRetries                    uint32        `yaml:"token_fetcher_max_retries"`
 	TokenFetcherRetryInterval                 time.Duration `yaml:"token_fetcher_retry_interval"`

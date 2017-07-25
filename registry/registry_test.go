@@ -694,6 +694,7 @@ var _ = Describe("RouteRegistry", func() {
 			e := p.Endpoints("", "").Next()
 			Expect(e).ToNot(BeNil())
 			Expect(e.CanonicalAddr()).To(MatchRegexp("192.168.1.1:123[4|5]"))
+
 		})
 
 		It("selects the outer most wild card route if one exists", func() {
@@ -743,6 +744,48 @@ var _ = Describe("RouteRegistry", func() {
 			lookupTime := reporter.CaptureLookupTimeArgsForCall(0)
 			Expect(lookupTime).To(BeNumerically(">", 0))
 		})
+
+		// Context("when maxConnsPerBackend > 0", func() {
+		// 	var overloadRegistry Registry
+		// 	BeforeEach(func() {
+		// 		overloadConfig := new(config.Config)
+		// 		*overloadConfig = *configObj
+		// 		overloadConfig.Backends.MaxConns = 2
+		// 		overloadRegistry = NewRouteRegistry(logger, overloadConfig, reporter)
+		// 	})
+		//
+		// 	It("returns a pool containing only non-overloaded endpoints", func() {
+		// 		m1 := route.NewEndpoint("", "192.168.1.1", 1234, "", "", nil, -1, "", modTag, "")
+		// 		m2 := route.NewEndpoint("", "192.168.1.1", 1235, "", "", nil, -1, "", modTag, "")
+		// 		m2.Stats.NumberConnections.Increment()
+		// 		m2.Stats.NumberConnections.Increment()
+		// 		overloadRegistry.Register("bar", m1)
+		// 		overloadRegistry.Register("bar", m2)
+		//
+		// 		pool := overloadRegistry.Lookup("bar")
+		// 		len := 0
+		// 		pool.Each(func(endpoint *route.Endpoint) {
+		// 			len++
+		// 		})
+		// 		Expect(len).To(Equal(1))
+		// 	})
+		//
+		// 	It("marks the pool as overloaded if all endpoints are removed", func() {
+		// 		m1 := route.NewEndpoint("", "192.168.1.1", 1234, "", "", nil, -1, "", modTag, "")
+		// 		m2 := route.NewEndpoint("", "192.168.1.1", 1235, "", "", nil, -1, "", modTag, "")
+		// 		m1.Stats.NumberConnections.Increment()
+		// 		m1.Stats.NumberConnections.Increment()
+		// 		m2.Stats.NumberConnections.Increment()
+		// 		m2.Stats.NumberConnections.Increment()
+		// 		overloadRegistry.Register("bar", m1)
+		// 		overloadRegistry.Register("bar", m2)
+		//
+		// 		pool := overloadRegistry.Lookup("bar")
+		// 		Expect(pool.IsEmpty()).To(BeTrue())
+		// 		Expect(pool.IsOverloaded()).To(BeTrue())
+		// 	})
+		//
+		//	})
 
 		Context("has context path", func() {
 
@@ -843,6 +886,42 @@ var _ = Describe("RouteRegistry", func() {
 				Expect(p).To(BeNil())
 			})
 		})
+
+		// Context("when maxConnsPerBackend > 0", func() {
+		// 	var overloadRegistry Registry
+		// 	BeforeEach(func() {
+		// 		overloadConfig := new(config.Config)
+		// 		*overloadConfig = *configObj
+		// 		overloadConfig.Backends.MaxConns = 2
+		// 		overloadRegistry = NewRouteRegistry(logger, overloadConfig, reporter)
+		// 	})
+		//
+		// 	It("returns an empty pool marked as overloaded if the specified index is overloaded", func() {
+		// 		m1 := route.NewEndpoint("fake-id1", "192.168.1.1", 1234, "", "0", nil, -1, "", modTag, "")
+		// 		m2 := route.NewEndpoint("fake-id1", "192.168.1.1", 1235, "", "1", nil, -1, "", modTag, "")
+		// 		m2.Stats.NumberConnections.Increment()
+		// 		m2.Stats.NumberConnections.Increment()
+		// 		overloadRegistry.Register("bar", m1)
+		// 		overloadRegistry.Register("bar", m2)
+		// 		pool := overloadRegistry.LookupWithInstance("bar", "fake-id1", "0")
+		// 		Expect(pool).NotTo(BeNil())
+		// 		Expect(pool.IsEmpty()).To(BeFalse())
+		// 		Expect(pool.IsOverloaded()).To(BeFalse())
+		// 	})
+		//
+		// 	FIt("returns an empty pool marked as overloaded if the specified index is not overloaded", func() {
+		// 		m1 := route.NewEndpoint("fake-id1", "192.168.1.1", 1234, "", "0", nil, -1, "", modTag, "")
+		// 		m2 := route.NewEndpoint("fake-id1", "192.168.1.1", 1235, "", "1", nil, -1, "", modTag, "")
+		// 		m2.Stats.NumberConnections.Increment()
+		// 		m2.Stats.NumberConnections.Increment()
+		// 		overloadRegistry.Register("bar", m1)
+		// 		overloadRegistry.Register("bar", m2)
+		// 		pool := overloadRegistry.LookupWithInstance("bar", "fake-id1", "1")
+		// 		Expect(pool).NotTo(BeNil())
+		// 		Expect(pool.IsEmpty()).To(BeTrue())
+		// 		Expect(pool.IsOverloaded()).To(BeTrue())
+		// 	})
+		// })
 	})
 
 	Context("Prunes Stale Droplets", func() {

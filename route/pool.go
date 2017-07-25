@@ -79,6 +79,7 @@ type Pool struct {
 
 	retryAfterFailure time.Duration
 	nextIdx           int
+	overloaded        bool
 }
 
 func NewEndpoint(
@@ -170,6 +171,21 @@ func (p *Pool) RouteServiceUrl() string {
 	}
 }
 
+func (p *Pool) RemoveOverloadedEndpoints(maxConnsPerBackend int64) {
+	endpointsToRemove := []*Endpoint{}
+	p.Each(func(endpoint *Endpoint) {
+		if endpoint.Stats.NumberConnections.Count() >= maxConnsPerBackend {
+			endpointsToRemove = append(endpointsToRemove, endpoint)
+		}
+	})
+	for _, end := range endpointsToRemove {
+		p.Remove(end)
+	}
+	if len(endpointsToRemove) > 0 && p.IsEmpty() {
+		p.overloaded = true
+	}
+}
+
 func (p *Pool) PruneEndpoints(defaultThreshold time.Duration) []*Endpoint {
 	p.lock.Lock()
 
@@ -251,6 +267,10 @@ func (p *Pool) findById(id string) *Endpoint {
 	p.lock.Unlock()
 
 	return endpoint
+}
+
+func (p *Pool) IsOverloaded() bool {
+	return p.overloaded
 }
 
 func (p *Pool) IsEmpty() bool {

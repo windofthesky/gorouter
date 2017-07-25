@@ -412,6 +412,24 @@ enable_proxy: true
 			Expect(config.MaxIdleConns).To(Equal(100))
 		})
 
+		It("defaults MaxConns to 0", func() {
+			var b = []byte("")
+			err := config.Initialize(b)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(config.Backend.MaxConns).To(Equal(0))
+		})
+
+		It("sets MaxConns", func() {
+			var b = []byte(`
+backends:
+  max_conns: 10`)
+			err := config.Initialize(b)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(config.Backend.MaxConns).To(Equal(10))
+		})
+
 		It("defaults MaxIdleConnsPerHost to 2", func() {
 			var b = []byte("")
 			err := config.Initialize(b)
