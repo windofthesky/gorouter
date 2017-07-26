@@ -79,7 +79,7 @@ var _ = Describe("Router Integration", func() {
 		caCertsPath, err := filepath.Abs(caCertsPath)
 		Expect(err).ToNot(HaveOccurred())
 		cfg.LoadBalancerHealthyThreshold = 0
-		cfg.Backends.MaxConns = 2
+		cfg.Backends.MaxConns = 1
 		cfg.OAuth = config.OAuthConfig{
 			TokenEndpoint:     "127.0.0.1",
 			Port:              8443,
@@ -1023,19 +1023,22 @@ var _ = Describe("Router Integration", func() {
 
 			cfgFile := filepath.Join(tmpdir, "config.yml")
 			config := createConfig(cfgFile, statusPort, proxyPort, defaultPruneInterval, defaultPruneThreshold, 0, false, natsPort)
+			config.LoadBalance = "least-connection"
 
 			gorouterSession = startGorouterSession(cfgFile)
+			defer gorouterSession.Kill()
 
 			mbusClient, err := newMessageBus(config)
 			Expect(err).ToNot(HaveOccurred())
 
-			respChan := make(chan struct{})
+			// respChan := make(chan struct{})
+			fmt.Println("setting up greet app")
 			runningApp1 := test.NewGreetApp([]route.Uri{"innocent.bystander.vcap.me"}, proxyPort, mbusClient, nil)
-			runningApp1.AddHandler("/path", func(w http.ResponseWriter, r *http.Request) {
+			runningApp1.AddHandler("/sleep", func(w http.ResponseWriter, r *http.Request) {
 				defer GinkgoRecover()
 				fmt.Println("starting wait!", time.Now().String())
 				//	<-respChan
-				time.Sleep(time.Second)
+				time.Sleep(2 * time.Second)
 				w.WriteHeader(http.StatusOK)
 			})
 
@@ -1057,22 +1060,25 @@ var _ = Describe("Router Integration", func() {
 			}()
 
 			var wg sync.WaitGroup
-			for i := 0; i <= 2; i++ {
+			for i := 0; i <= 5; i++ {
 				fmt.Println("LOOP NUMBER: ", i)
 				wg.Add(1)
+				time.Sleep(time.Duration(i) * time.Second)
 				go func() {
 					defer wg.Done()
 					defer GinkgoRecover()
-					Expect(runningApp1.CheckAppStatusWithPath(200, "path")).ToNot(HaveOccurred())
-					fmt.Printf("done calling %d : %s\n", i, time.Now().String())
+					err := runningApp1.CheckAppStatusWithPath(200, "sleep")
+					fmt.Println("CheckApp Error: ", err)
+					// err := runningApp1.CheckAppStatus(200)
+					Expect(err).ToNot(HaveOccurred())
 				}()
 			}
-			Expect(runningApp1.CheckAppStatusWithPath(503, "path")).ToNot(HaveOccurred())
+			Expect(runningApp1.CheckAppStatusWithPath(503, "sleep")).ToNot(HaveOccurred())
 			// Eventually(func() error {
 			// 	return runningApp1.CheckAppStatusWithPath(503, "path")
 			// }).ShouldNot(HaveOccurred())
 
-			close(respChan)
+			// close(respChan)
 			wg.Wait()
 		})
 	})

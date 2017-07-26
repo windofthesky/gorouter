@@ -173,15 +173,14 @@ func (p *Pool) RouteServiceUrl() string {
 
 func (p *Pool) FilteredPool(maxConnsPerBackend int64) *Pool {
 	filteredPool := NewPool(p.retryAfterFailure, p.ContextPath())
-	p.lock.Lock()
-	p.Each(func(endpoint *Endpoint) {
-		endbytes, _ := endpoint.MarshalJSON()
-		fmt.Printf("count stats %d endpoint info %#v", endpoint.Stats.NumberConnections.Count(), string(endbytes))
+	poolCopy := new(Pool)
+	*poolCopy = *p
+	poolCopy.Each(func(endpoint *Endpoint) {
 		if endpoint.Stats.NumberConnections.Count() < maxConnsPerBackend {
 			filteredPool.Put(endpoint)
 		}
 	})
-	p.lock.Unlock()
+
 	return filteredPool
 }
 
