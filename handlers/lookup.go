@@ -38,15 +38,21 @@ func NewLookup(registry registry.Registry, rep metrics.CombinedReporter, logger 
 }
 
 func (l *lookupHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
+	l.logger.Info("doing lookup....")
 	pool := l.lookup(r)
 	if pool == nil {
 		l.handleMissingRoute(rw, r)
 		return
 	}
-	pool.RemoveOverloadedEndpoints(l.maxConnsPerBackend)
-	if pool.IsOverloaded() {
-		l.handleOverloadedRoute(rw, r)
-		return
+	if l.maxConnsPerBackend > 0 && !pool.IsEmpty() {
+		newPool := pool.FilteredPool(l.maxConnsPerBackend)
+		poobytes, _ := newPool.MarshalJSON()
+		fmt.Printf("\n\nmax conn %d pool json %s", l.maxConnsPerBackend, string(poobytes))
+		if newPool.IsEmpty() {
+			l.handleOverloadedRoute(rw, r)
+			return
+		}
+		pool = newPool
 	}
 	requestInfo, err := ContextRequestInfo(r)
 	if err != nil {
@@ -55,6 +61,7 @@ func (l *lookupHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request, next 
 	}
 	requestInfo.RoutePool = pool
 	next(rw, r)
+	l.logger.Info("done with lookup.")
 }
 
 func (l *lookupHandler) handleMissingRoute(rw http.ResponseWriter, r *http.Request) {

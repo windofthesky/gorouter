@@ -745,48 +745,6 @@ var _ = Describe("RouteRegistry", func() {
 			Expect(lookupTime).To(BeNumerically(">", 0))
 		})
 
-		// Context("when maxConnsPerBackend > 0", func() {
-		// 	var overloadRegistry Registry
-		// 	BeforeEach(func() {
-		// 		overloadConfig := new(config.Config)
-		// 		*overloadConfig = *configObj
-		// 		overloadConfig.Backends.MaxConns = 2
-		// 		overloadRegistry = NewRouteRegistry(logger, overloadConfig, reporter)
-		// 	})
-		//
-		// 	It("returns a pool containing only non-overloaded endpoints", func() {
-		// 		m1 := route.NewEndpoint("", "192.168.1.1", 1234, "", "", nil, -1, "", modTag, "")
-		// 		m2 := route.NewEndpoint("", "192.168.1.1", 1235, "", "", nil, -1, "", modTag, "")
-		// 		m2.Stats.NumberConnections.Increment()
-		// 		m2.Stats.NumberConnections.Increment()
-		// 		overloadRegistry.Register("bar", m1)
-		// 		overloadRegistry.Register("bar", m2)
-		//
-		// 		pool := overloadRegistry.Lookup("bar")
-		// 		len := 0
-		// 		pool.Each(func(endpoint *route.Endpoint) {
-		// 			len++
-		// 		})
-		// 		Expect(len).To(Equal(1))
-		// 	})
-		//
-		// 	It("marks the pool as overloaded if all endpoints are removed", func() {
-		// 		m1 := route.NewEndpoint("", "192.168.1.1", 1234, "", "", nil, -1, "", modTag, "")
-		// 		m2 := route.NewEndpoint("", "192.168.1.1", 1235, "", "", nil, -1, "", modTag, "")
-		// 		m1.Stats.NumberConnections.Increment()
-		// 		m1.Stats.NumberConnections.Increment()
-		// 		m2.Stats.NumberConnections.Increment()
-		// 		m2.Stats.NumberConnections.Increment()
-		// 		overloadRegistry.Register("bar", m1)
-		// 		overloadRegistry.Register("bar", m2)
-		//
-		// 		pool := overloadRegistry.Lookup("bar")
-		// 		Expect(pool.IsEmpty()).To(BeTrue())
-		// 		Expect(pool.IsOverloaded()).To(BeTrue())
-		// 	})
-		//
-		//	})
-
 		Context("has context path", func() {
 
 			var m *route.Endpoint

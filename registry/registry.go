@@ -2,7 +2,6 @@ package registry
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -48,7 +47,6 @@ type RouteRegistry struct {
 	suspendPruning func() bool
 	pruningStatus  PruneStatus
 
-	maxConnsPerBackend         int64
 	pruneStaleDropletsInterval time.Duration
 	dropletStaleThreshold      time.Duration
 
@@ -66,7 +64,6 @@ func NewRouteRegistry(logger logger.Logger, c *config.Config, reporter metrics.R
 	r.logger = logger
 	r.byURI = container.NewTrie()
 
-	r.maxConnsPerBackend = int64(c.Backends.MaxConns)
 	r.pruneStaleDropletsInterval = c.PruneStaleDropletsInterval
 	r.dropletStaleThreshold = c.DropletStaleThreshold
 	r.suspendPruning = func() bool { return false }
@@ -153,15 +150,9 @@ func (r *RouteRegistry) Lookup(uri route.Uri) *route.Pool {
 	}
 
 	r.RUnlock()
-	//fmt.Println("pool after uri match: ", pool)
 	endLookup := time.Now()
 	r.reporter.CaptureLookupTime(endLookup.Sub(started))
 
-	// if r.maxConnsPerBackend > 0 {
-	// 	pool.RemoveOverloadedEndpoints(r.maxConnsPerBackend)
-	// }
-	//
-	// fmt.Println("pool before return: ", pool)
 	return pool
 }
 
@@ -187,9 +178,7 @@ func (r *RouteRegistry) LookupWithInstance(uri route.Uri, appID string, appIndex
 	uri = uri.RouteKey()
 	p := r.Lookup(uri)
 
-	fmt.Println("pool in instance lookup", p)
 	if p == nil {
-		fmt.Println("bye bye")
 		return nil
 	}
 

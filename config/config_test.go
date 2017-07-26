@@ -417,7 +417,7 @@ enable_proxy: true
 			err := config.Initialize(b)
 			Expect(err).ToNot(HaveOccurred())
 
-			Expect(config.Backend.MaxConns).To(Equal(0))
+			Expect(config.Backends.MaxConns).To(Equal(int64(0)))
 		})
 
 		It("sets MaxConns", func() {
@@ -427,7 +427,7 @@ backends:
 			err := config.Initialize(b)
 			Expect(err).ToNot(HaveOccurred())
 
-			Expect(config.Backend.MaxConns).To(Equal(10))
+			Expect(config.Backends.MaxConns).To(Equal(int64(10)))
 		})
 
 		It("defaults MaxIdleConnsPerHost to 2", func() {

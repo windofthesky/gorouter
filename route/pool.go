@@ -171,19 +171,18 @@ func (p *Pool) RouteServiceUrl() string {
 	}
 }
 
-func (p *Pool) RemoveOverloadedEndpoints(maxConnsPerBackend int64) {
-	endpointsToRemove := []*Endpoint{}
+func (p *Pool) FilteredPool(maxConnsPerBackend int64) *Pool {
+	filteredPool := NewPool(p.retryAfterFailure, p.ContextPath())
+	p.lock.Lock()
 	p.Each(func(endpoint *Endpoint) {
-		if endpoint.Stats.NumberConnections.Count() >= maxConnsPerBackend {
-			endpointsToRemove = append(endpointsToRemove, endpoint)
+		endbytes, _ := endpoint.MarshalJSON()
+		fmt.Printf("count stats %d endpoint info %#v", endpoint.Stats.NumberConnections.Count(), string(endbytes))
+		if endpoint.Stats.NumberConnections.Count() < maxConnsPerBackend {
+			filteredPool.Put(endpoint)
 		}
 	})
-	for _, end := range endpointsToRemove {
-		p.Remove(end)
-	}
-	if len(endpointsToRemove) > 0 && p.IsEmpty() {
-		p.overloaded = true
-	}
+	p.lock.Unlock()
+	return filteredPool
 }
 
 func (p *Pool) PruneEndpoints(defaultThreshold time.Duration) []*Endpoint {
@@ -267,10 +266,6 @@ func (p *Pool) findById(id string) *Endpoint {
 	p.lock.Unlock()
 
 	return endpoint
-}
-
-func (p *Pool) IsOverloaded() bool {
-	return p.overloaded
 }
 
 func (p *Pool) IsEmpty() bool {

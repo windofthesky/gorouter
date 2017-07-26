@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"code.cloudfoundry.org/gorouter/config"
 	"code.cloudfoundry.org/gorouter/handlers"
@@ -78,6 +79,7 @@ var _ = Describe("Router Integration", func() {
 		caCertsPath, err := filepath.Abs(caCertsPath)
 		Expect(err).ToNot(HaveOccurred())
 		cfg.LoadBalancerHealthyThreshold = 0
+		cfg.Backends.MaxConns = 2
 		cfg.OAuth = config.OAuthConfig{
 			TokenEndpoint:     "127.0.0.1",
 			Port:              8443,
@@ -1009,7 +1011,70 @@ var _ = Describe("Router Integration", func() {
 				Eventually(session, 5*time.Second).Should(Exit(1))
 			})
 		})
+	})
 
+	Context("when max conn per backend is set", func() {
+		FIt("responds with 503 when conn limit is reached", func() {
+			localIP, err := localip.LocalIP()
+			Expect(err).ToNot(HaveOccurred())
+
+			statusPort := test_util.NextAvailPort()
+			proxyPort := test_util.NextAvailPort()
+
+			cfgFile := filepath.Join(tmpdir, "config.yml")
+			config := createConfig(cfgFile, statusPort, proxyPort, defaultPruneInterval, defaultPruneThreshold, 0, false, natsPort)
+
+			gorouterSession = startGorouterSession(cfgFile)
+
+			mbusClient, err := newMessageBus(config)
+			Expect(err).ToNot(HaveOccurred())
+
+			respChan := make(chan struct{})
+			runningApp1 := test.NewGreetApp([]route.Uri{"innocent.bystander.vcap.me"}, proxyPort, mbusClient, nil)
+			runningApp1.AddHandler("/path", func(w http.ResponseWriter, r *http.Request) {
+				defer GinkgoRecover()
+				fmt.Println("starting wait!", time.Now().String())
+				//	<-respChan
+				time.Sleep(time.Second)
+				w.WriteHeader(http.StatusOK)
+			})
+
+			runningApp1.Listen()
+			routesUri := fmt.Sprintf("http://%s:%s@%s:%d/routes", config.Status.User, config.Status.Pass, localIP, statusPort)
+
+			Eventually(func() bool { return appRegistered(routesUri, runningApp1) }).Should(BeTrue())
+
+			heartbeatInterval := 200 * time.Millisecond
+			runningTicker := time.NewTicker(heartbeatInterval)
+
+			go func() {
+				for {
+					select {
+					case <-runningTicker.C:
+						runningApp1.Register()
+					}
+				}
+			}()
+
+			var wg sync.WaitGroup
+			for i := 0; i <= 2; i++ {
+				fmt.Println("LOOP NUMBER: ", i)
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					defer GinkgoRecover()
+					Expect(runningApp1.CheckAppStatusWithPath(200, "path")).ToNot(HaveOccurred())
+					fmt.Printf("done calling %d : %s\n", i, time.Now().String())
+				}()
+			}
+			Expect(runningApp1.CheckAppStatusWithPath(503, "path")).ToNot(HaveOccurred())
+			// Eventually(func() error {
+			// 	return runningApp1.CheckAppStatusWithPath(503, "path")
+			// }).ShouldNot(HaveOccurred())
+
+			close(respChan)
+			wg.Wait()
+		})
 	})
 })
 

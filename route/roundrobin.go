@@ -1,6 +1,7 @@
 package route
 
 import (
+	"fmt"
 	"math/rand"
 	"time"
 )
@@ -91,7 +92,11 @@ func (r *RoundRobin) EndpointFailed() {
 }
 
 func (r *RoundRobin) PreRequest(e *Endpoint) {
+	e.Stats.NumberConnections.Increment()
+	fmt.Println("after incrementing ...", e.Stats.NumberConnections.Count())
 }
 
 func (r *RoundRobin) PostRequest(e *Endpoint) {
+	e.Stats.NumberConnections.Decrement()
+	fmt.Println("after dec ...", e.Stats.NumberConnections.Count())
 }

@@ -69,7 +69,7 @@ type OAuthConfig struct {
 }
 
 type BackendConfig struct {
-	MaxConns int `yaml:"max_conns"`
+	MaxConns int64 `yaml:"max_conns"`
 }
 
 type LoggingConfig struct {

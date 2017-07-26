@@ -165,27 +165,8 @@ var _ = Describe("Pool", func() {
 			})
 		})
 
-		Context("RemoveOverloadedEndpoints", func() {
-			FIt("marks the pool as overloaded when it removes all endpoints", func() {
-				Expect(pool.IsEmpty()).To(BeTrue())
-				endpoint1 := route.NewEndpoint("", "1.2.3.4", 5678, "", "", nil, -1, "", modTag, "")
-				endpoint1.Stats.NumberConnections.Increment()
-				endpoint1.Stats.NumberConnections.Increment()
-				endpoint1.Stats.NumberConnections.Increment()
-				Expect(pool.Put(endpoint1)).To(BeTrue())
-
-				pool.RemoveOverloadedEndpoints(1)
-				Expect(pool.IsEmpty()).To(BeTrue())
-				Expect(pool.IsOverloaded()).To(BeTrue())
-			})
-
-			FIt("does not mark a pool that started empty as overloaded", func() {
-				Expect(pool.IsEmpty()).To(BeTrue())
-				pool.RemoveOverloadedEndpoints(1)
-				Expect(pool.IsOverloaded()).To(BeFalse())
-			})
-
-			FIt("removes only overloaded endpoints in the pool", func() {
+		Context("Filtered pool", func() {
+			It("returns copy of the pool with non overloaded endpoints", func() {
 				Expect(pool.IsEmpty()).To(BeTrue())
 				endpoint1 := route.NewEndpoint("", "1.2.3.4", 5678, "", "", nil, -1, "", modTag, "")
 				endpoint1.Stats.NumberConnections.Increment()
@@ -194,32 +175,30 @@ var _ = Describe("Pool", func() {
 				Expect(pool.Put(endpoint1)).To(BeTrue())
 
 				endpoint2 := route.NewEndpoint("", "1.3.5.6", 5679, "", "", nil, -1, "", modTag, "")
-				endpoint1.Stats.NumberConnections.Increment()
 				Expect(pool.Put(endpoint2)).To(BeTrue())
-				// verify the pool has 2 endpoints
+				// verify the pool before filter has 2 endpoints
 				var len int
 				pool.Each(func(endpoint *route.Endpoint) {
 					len++
 				})
 				Expect(len).To(Equal(2))
 
+				newPool := pool.FilteredPool(1)
+				Expect(newPool).NotTo(BeNil())
+
+				// verify the original pool has both endpoints
 				len = 0
-				pool.RemoveOverloadedEndpoints(2)
-				// verify the pool has an endpoint
 				pool.Each(func(endpoint *route.Endpoint) {
 					len++
 				})
-				Expect(len).To(Equal(1))
-				Expect(pool.IsOverloaded()).To(BeFalse())
-			})
-			FIt("does not remove non-overloaded endpoints", func() {
-				endpoint1 := route.NewEndpoint("", "1.2.3.4", 5678, "", "", nil, -1, "", modTag, "")
-				endpoint1.Stats.NumberConnections.Increment()
-				Expect(pool.Put(endpoint1)).To(BeTrue())
+				Expect(len).To(Equal(2))
 
-				pool.RemoveOverloadedEndpoints(2)
-				Expect(pool.IsEmpty()).To(BeFalse())
-				Expect(pool.IsOverloaded()).To(BeFalse())
+				// verify newpool has an endpoint
+				newPoolLen := 0
+				newPool.Each(func(endpoint *route.Endpoint) {
+					newPoolLen++
+				})
+				Expect(newPoolLen).To(Equal(1))
 			})
 		})
 	})
