@@ -1023,7 +1023,6 @@ var _ = Describe("Router Integration", func() {
 
 			cfgFile := filepath.Join(tmpdir, "config.yml")
 			config := createConfig(cfgFile, statusPort, proxyPort, defaultPruneInterval, defaultPruneThreshold, 0, false, natsPort)
-			config.LoadBalance = "least-connection"
 
 			gorouterSession = startGorouterSession(cfgFile)
 			defer gorouterSession.Kill()
@@ -1031,14 +1030,10 @@ var _ = Describe("Router Integration", func() {
 			mbusClient, err := newMessageBus(config)
 			Expect(err).ToNot(HaveOccurred())
 
-			// respChan := make(chan struct{})
-			fmt.Println("setting up greet app")
 			runningApp1 := test.NewGreetApp([]route.Uri{"innocent.bystander.vcap.me"}, proxyPort, mbusClient, nil)
 			runningApp1.AddHandler("/sleep", func(w http.ResponseWriter, r *http.Request) {
 				defer GinkgoRecover()
-				fmt.Println("starting wait!", time.Now().String())
-				//	<-respChan
-				time.Sleep(2 * time.Second)
+				time.Sleep(4 * time.Second)
 				w.WriteHeader(http.StatusOK)
 			})
 
@@ -1060,25 +1055,17 @@ var _ = Describe("Router Integration", func() {
 			}()
 
 			var wg sync.WaitGroup
-			for i := 0; i <= 5; i++ {
-				fmt.Println("LOOP NUMBER: ", i)
-				wg.Add(1)
-				time.Sleep(time.Duration(i) * time.Second)
-				go func() {
-					defer wg.Done()
-					defer GinkgoRecover()
-					err := runningApp1.CheckAppStatusWithPath(200, "sleep")
-					fmt.Println("CheckApp Error: ", err)
-					// err := runningApp1.CheckAppStatus(200)
-					Expect(err).ToNot(HaveOccurred())
-				}()
-			}
-			Expect(runningApp1.CheckAppStatusWithPath(503, "sleep")).ToNot(HaveOccurred())
-			// Eventually(func() error {
-			// 	return runningApp1.CheckAppStatusWithPath(503, "path")
-			// }).ShouldNot(HaveOccurred())
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer GinkgoRecover()
+				err := runningApp1.CheckAppStatusWithPath(200, "sleep")
+				Expect(err).ToNot(HaveOccurred())
+			}()
+			Eventually(func() error {
+				return runningApp1.CheckAppStatusWithPath(503, "path")
+			}).ShouldNot(HaveOccurred())
 
-			// close(respChan)
 			wg.Wait()
 		})
 	})
