@@ -670,10 +670,13 @@ routing_api:
 		Context("When EnableSSL is set to true", func() {
 			var (
 				expectedTLSPEMs         []string
+				expectedCAPEMs          []string
 				expectedSSLCertificates []tls.Certificate
 				tlsPEM1YML              []byte
 				tlsPEM2YML              []byte
 				tlsPEM3YML              []byte
+				rootCA1YML              []byte
+				rootCA2YML              []byte
 				keyPEM1, certPEM1       []byte
 			)
 			BeforeEach(func() {
@@ -709,6 +712,20 @@ routing_api:
 				Expect(err).ToNot(HaveOccurred())
 
 				expectedSSLCertificates = []tls.Certificate{cert1, cert2, cert3}
+
+				_, rootRSAPEM := test_util.CreateKeyPair("carrots.com")
+				_, rootECDSAPEM := test_util.CreateECKeyPair("carrots.net")
+
+				expectedCAPEMs = []string{
+					string(rootRSAPEM),
+					string(rootECDSAPEM),
+				}
+
+				rootCA1YML, err = yaml.Marshal(string(rootRSAPEM))
+				Expect(err).ToNot(HaveOccurred())
+				rootCA2YML, err = yaml.Marshal(string(rootECDSAPEM))
+				Expect(err).ToNot(HaveOccurred())
+
 			})
 
 			Context("when valid value for min_tls_version is set", func() {
@@ -752,6 +769,30 @@ tls_pem:
 					Expect(err).NotTo(HaveOccurred())
 					config.Process()
 					Expect(config.MinTLSVersion).To(Equal(uint16(tls.VersionTLS12)))
+				})
+			})
+
+			FContext("when a valid CACerts is provided", func() {
+				It("populates the CACerts field", func() {
+					var b = []byte(fmt.Sprintf(`
+enable_ssl: true
+cipher_suites: TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+tls_pem:
+%s%s%s
+ca_certs:
+%s%s
+`, tlsPEM1YML, tlsPEM2YML, tlsPEM3YML, rootCA1YML, rootCA2YML))
+					err := config.Initialize(b)
+					Expect(err).ToNot(HaveOccurred())
+
+					Expect(config.EnableSSL).To(Equal(true))
+
+					config.Process()
+					fmt.Println(rootCA1YML)
+					Expect(config.CACerts).To(ConsistOf(expectedCAPEMs))
+
+					//Expect(config.MTLSRootCAs).To(ConsistOf(expectedSSLCertificates))
+
 				})
 			})
 

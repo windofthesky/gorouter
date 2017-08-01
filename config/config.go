@@ -2,7 +2,6 @@ package config
 
 import (
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/pem"
 	"fmt"
 	"net/url"
@@ -120,7 +119,7 @@ type Config struct {
 	SSLPort                  uint16        `yaml:"ssl_port"`
 	SSLCertificates          []tls.Certificate
 	TLSPEM                   []string `yaml:"tls_pem"`
-	MTLSRootCAs              []*x509.Certificate
+	CACerts                  []string `yaml:"ca_certs"`
 	SkipSSLValidation        bool     `yaml:"skip_ssl_validation"`
 	ForwardedClientCert      string   `yaml:"forwarded_client_cert"`
 	ForceForwardedProtoHttps bool     `yaml:"force_forwarded_proto_https"`
