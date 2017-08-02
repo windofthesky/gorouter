@@ -2,11 +2,9 @@ package proxy_test
 
 import (
 	"bytes"
-	"crypto/x509"
 	"io/ioutil"
 	"net"
 	"net/http"
-	"path/filepath"
 	"time"
 
 	"code.cloudfoundry.org/gorouter/common/secure"
@@ -339,15 +337,6 @@ var _ = Describe("Route Services", func() {
 	})
 
 	Context("with a valid certificate", func() {
-		BeforeEach(func() {
-			caCertsPath := filepath.Join("..", "test", "assets", "certs", "uaa-ca.pem")
-			certBytes, err := ioutil.ReadFile(caCertsPath)
-			Expect(err).NotTo(HaveOccurred())
-
-			caCertPool = x509.NewCertPool()
-			ok := caCertPool.AppendCertsFromPEM(certBytes)
-			Expect(ok).To(BeTrue())
-		})
 
 		It("returns a 200 when we route to a route service", func() {
 			ln := registerHandlerWithRouteService(r, "my_host.com", routeServiceURL, func(conn *test_util.HttpConn) {

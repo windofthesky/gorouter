@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -239,22 +240,25 @@ func (r *Router) DrainAndStop() {
 
 func (r *Router) serveHTTPS(server *http.Server, errChan chan error) error {
 	if r.config.EnableSSL {
-		//		rootCAs, err := x509.SystemCertPool()
-		//		if err != nil {
-		//			rootCAs = nil
-		//		}
-		//		if err == nil {
-		//			for _, cert := range r.config.MTLSRootCAs {
-		//				rootCAs.AddCert(cert)
-		//			}
-		//		}
+		rootCAs, err := x509.SystemCertPool()
+		if err != nil {
+			rootCAs = nil
+		}
+		if err == nil {
+			for _, cert := range r.config.CACerts {
+				if ok := rootCAs.AppendCertsFromPEM([]byte(cert)); !ok {
+					r.logger.Fatal("servehttps-certpool-error",
+						zap.Error(fmt.Errorf("error adding a CA cert to cert pool")))
+				}
+			}
+		}
 
 		tlsConfig := &tls.Config{
 			Certificates: r.config.SSLCertificates,
 			CipherSuites: r.config.CipherSuites,
 			MinVersion:   r.config.MinTLSVersion,
-			//	ClientCAs:    rootCAs,
-			ClientAuth: tls.VerifyClientCertIfGiven,
+			ClientCAs:    rootCAs,
+			ClientAuth:   tls.VerifyClientCertIfGiven,
 		}
 
 		tlsConfig.BuildNameToCertificate()

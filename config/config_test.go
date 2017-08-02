@@ -2,6 +2,8 @@ package config_test
 
 import (
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 
 	yaml "gopkg.in/yaml.v2"
@@ -669,15 +671,16 @@ routing_api:
 
 		Context("When EnableSSL is set to true", func() {
 			var (
-				expectedTLSPEMs         []string
-				expectedCAPEMs          []string
-				expectedSSLCertificates []tls.Certificate
-				tlsPEM1YML              []byte
-				tlsPEM2YML              []byte
-				tlsPEM3YML              []byte
-				rootCA1YML              []byte
-				rootCA2YML              []byte
-				keyPEM1, certPEM1       []byte
+				expectedTLSPEMs          []string
+				expectedCAPEMs           []string
+				expectedSSLCertificates  []tls.Certificate
+				tlsPEM1YML               []byte
+				tlsPEM2YML               []byte
+				tlsPEM3YML               []byte
+				rootCA1YML               []byte
+				rootCA2YML               []byte
+				keyPEM1, certPEM1        []byte
+				rootRSAPEM, rootECDSAPEM []byte
 			)
 			BeforeEach(func() {
 				certChain := test_util.CreateSignedCertWithRootCA("spinach.com")
@@ -704,26 +707,28 @@ routing_api:
 				tlsPEM1Array := []string{tlsPem1}
 				tlsPEM2Array := []string{tlsPem2}
 				tlsPEM3Array := []string{tlsPem3}
-				tlsPEM1YML, err = yaml.Marshal(&tlsPEM1Array)
+				tlsPEM1YML, err = yaml.Marshal(tlsPEM1Array)
 				Expect(err).ToNot(HaveOccurred())
-				tlsPEM2YML, err = yaml.Marshal(&tlsPEM2Array)
+				tlsPEM2YML, err = yaml.Marshal(tlsPEM2Array)
 				Expect(err).ToNot(HaveOccurred())
-				tlsPEM3YML, err = yaml.Marshal(&tlsPEM3Array)
+				tlsPEM3YML, err = yaml.Marshal(tlsPEM3Array)
 				Expect(err).ToNot(HaveOccurred())
 
 				expectedSSLCertificates = []tls.Certificate{cert1, cert2, cert3}
 
-				_, rootRSAPEM := test_util.CreateKeyPair("carrots.com")
-				_, rootECDSAPEM := test_util.CreateECKeyPair("carrots.net")
+				_, rootRSAPEM = test_util.CreateKeyPair("carrots.com")
+				_, rootECDSAPEM = test_util.CreateECKeyPair("carrots.net")
 
 				expectedCAPEMs = []string{
 					string(rootRSAPEM),
 					string(rootECDSAPEM),
 				}
 
-				rootCA1YML, err = yaml.Marshal(string(rootRSAPEM))
+				rootCA1Array := []string{string(rootRSAPEM)}
+				rootCA2Array := []string{string(rootECDSAPEM)}
+				rootCA1YML, err = yaml.Marshal(rootCA1Array)
 				Expect(err).ToNot(HaveOccurred())
-				rootCA2YML, err = yaml.Marshal(string(rootECDSAPEM))
+				rootCA2YML, err = yaml.Marshal(rootCA2Array)
 				Expect(err).ToNot(HaveOccurred())
 
 			})
@@ -772,7 +777,7 @@ tls_pem:
 				})
 			})
 
-			FContext("when a valid CACerts is provided", func() {
+			Context("when a valid CACerts is provided", func() {
 				It("populates the CACerts field", func() {
 					var b = []byte(fmt.Sprintf(`
 enable_ssl: true
@@ -786,13 +791,32 @@ ca_certs:
 					Expect(err).ToNot(HaveOccurred())
 
 					Expect(config.EnableSSL).To(Equal(true))
-
 					config.Process()
-					fmt.Println(rootCA1YML)
+					Expect(config.CACerts).To(ConsistOf(expectedCAPEMs))
+				})
+
+				It("populates the CAPool property", func() {
+					var b = []byte(fmt.Sprintf(`
+enable_ssl: true
+cipher_suites: TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+tls_pem:
+%s%s%s
+ca_certs:
+%s%s`, tlsPEM1YML, tlsPEM2YML, tlsPEM3YML, rootCA1YML, rootCA2YML))
+					err := config.Initialize(b)
+					Expect(err).ToNot(HaveOccurred())
+
+					Expect(config.EnableSSL).To(Equal(true))
+					config.Process()
 					Expect(config.CACerts).To(ConsistOf(expectedCAPEMs))
 
-					//Expect(config.MTLSRootCAs).To(ConsistOf(expectedSSLCertificates))
-
+					for _, cert := range config.CACerts {
+						certDER, _ := pem.Decode([]byte(cert))
+						Expect(err).NotTo(HaveOccurred())
+						c, err := x509.ParseCertificate(certDER.Bytes)
+						Expect(err).NotTo(HaveOccurred())
+						Expect(config.CAPool.Subjects()).To(ContainElement(c.RawSubject))
+					}
 				})
 			})
 
