@@ -167,6 +167,20 @@ var _ = Describe("RouteRegistry", func() {
 				Expect(p).ToNot(BeNil())
 				Expect(p.ContextPath()).To(Equal("/app/UP/we/Go"))
 			})
+
+			It("remembers host and path so that pools can be compared", func() {
+				m1 := route.NewEndpoint("", "192.168.1.1", 1234, "", "", nil, -1, "", modTag, "")
+
+				r.Register("dora.app.com/app", m1)
+				r.Register("golang.app.com/app", m1)
+
+				p1 := r.Lookup("dora.app.com/app/with/extra/stuff")
+				p2 := r.Lookup("dora.app.com/app")
+				p3 := r.Lookup("golang.app.com/app")
+
+				Expect(route.PoolsMatch(p1, p2)).To(BeTrue())
+				Expect(route.PoolsMatch(p1, p3)).To(BeFalse())
+			})
 		})
 
 		Context("wildcard routes", func() {
@@ -789,8 +803,8 @@ var _ = Describe("RouteRegistry", func() {
 			m1 := route.NewEndpoint("app-1-ID", "192.168.1.1", 1234, "", "0", nil, -1, "", modTag, "")
 			m2 := route.NewEndpoint("app-2-ID", "192.168.1.2", 1235, "", "0", nil, -1, "", modTag, "")
 
-			r.Register("bar", m1)
-			r.Register("bar", m2)
+			r.Register("bar.com/foo", m1)
+			r.Register("bar.com/foo", m2)
 
 			appId = "app-1-ID"
 			appIndex = "0"
@@ -800,7 +814,7 @@ var _ = Describe("RouteRegistry", func() {
 			Expect(r.NumUris()).To(Equal(1))
 			Expect(r.NumEndpoints()).To(Equal(2))
 
-			p := r.LookupWithInstance("bar", appId, appIndex)
+			p := r.LookupWithInstance("bar.com/foo", appId, appIndex)
 			e := p.Endpoints("", "").Next()
 
 			Expect(e).ToNot(BeNil())
@@ -808,6 +822,23 @@ var _ = Describe("RouteRegistry", func() {
 
 			Expect(r.NumUris()).To(Equal(1))
 			Expect(r.NumEndpoints()).To(Equal(2))
+		})
+
+		It("returns a pool that matches the result of Lookup", func() {
+			Expect(r.NumUris()).To(Equal(1))
+			Expect(r.NumEndpoints()).To(Equal(2))
+
+			p := r.LookupWithInstance("bar.com/foo", appId, appIndex)
+			e := p.Endpoints("", "").Next()
+
+			Expect(e).ToNot(BeNil())
+			Expect(e.CanonicalAddr()).To(MatchRegexp("192.168.1.1:1234"))
+
+			Expect(r.NumUris()).To(Equal(1))
+			Expect(r.NumEndpoints()).To(Equal(2))
+
+			p2 := r.Lookup("bar.com/foo")
+			Expect(route.PoolsMatch(p, p2)).To(BeTrue())
 		})
 
 		Context("when lookup fails to find any routes", func() {
@@ -826,7 +857,7 @@ var _ = Describe("RouteRegistry", func() {
 			It("returns a nil pool", func() {
 				Expect(r.NumUris()).To(Equal(1))
 				Expect(r.NumEndpoints()).To(Equal(2))
-				p := r.LookupWithInstance("bar", appId, appIndex)
+				p := r.LookupWithInstance("bar.com/foo", appId, appIndex)
 				Expect(p).To(BeNil())
 			})
 		})
@@ -840,7 +871,7 @@ var _ = Describe("RouteRegistry", func() {
 			It("returns a nil pool ", func() {
 				Expect(r.NumUris()).To(Equal(1))
 				Expect(r.NumEndpoints()).To(Equal(2))
-				p := r.LookupWithInstance("bar", appId, appIndex)
+				p := r.LookupWithInstance("bar.com/foo", appId, appIndex)
 				Expect(p).To(BeNil())
 			})
 		})
