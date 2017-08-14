@@ -3,21 +3,16 @@ package proxy
 import (
 	"crypto/tls"
 	"errors"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"strings"
-	"sync"
-	"time"
 
 	"code.cloudfoundry.org/gorouter/access_log"
-	router_http "code.cloudfoundry.org/gorouter/common/http"
 	"code.cloudfoundry.org/gorouter/config"
 	"code.cloudfoundry.org/gorouter/handlers"
 	"code.cloudfoundry.org/gorouter/logger"
 	"code.cloudfoundry.org/gorouter/metrics"
 	"code.cloudfoundry.org/gorouter/proxy/handler"
-	"code.cloudfoundry.org/gorouter/proxy/round_tripper"
 	"code.cloudfoundry.org/gorouter/proxy/utils"
 	"code.cloudfoundry.org/gorouter/registry"
 	"code.cloudfoundry.org/gorouter/route"
@@ -73,35 +68,35 @@ func NewProxy(
 		healthCheckUserAgent:     c.HealthCheckUserAgent,
 		forceForwardedProtoHttps: c.ForceForwardedProtoHttps,
 		defaultLoadBalance:       c.LoadBalance,
-		bufferPool:               NewBufferPool(),
+		//		bufferPool:               NewBufferPool(),
 	}
 
-	httpTransport := &http.Transport{
-		Dial: func(network, addr string) (net.Conn, error) {
-			conn, err := net.DialTimeout(network, addr, 5*time.Second)
-			if err != nil {
-				return conn, err
-			}
-			if c.EndpointTimeout > 0 {
-				err = conn.SetDeadline(time.Now().Add(c.EndpointTimeout))
-			}
-			return conn, err
-		},
-		DisableKeepAlives:   c.DisableKeepAlives,
-		MaxIdleConns:        c.MaxIdleConns,
-		IdleConnTimeout:     90 * time.Second, // setting the value to golang default transport
-		MaxIdleConnsPerHost: c.MaxIdleConnsPerHost,
-		DisableCompression:  true,
-		TLSClientConfig:     tlsConfig,
-	}
+	// httpTransport := &http.Transport{
+	// 	Dial: func(network, addr string) (net.Conn, error) {
+	// 		conn, err := net.DialTimeout(network, addr, 5*time.Second)
+	// 		if err != nil {
+	// 			return conn, err
+	// 		}
+	// 		if c.EndpointTimeout > 0 {
+	// 			err = conn.SetDeadline(time.Now().Add(c.EndpointTimeout))
+	// 		}
+	// 		return conn, err
+	// 	},
+	// 	DisableKeepAlives:   c.DisableKeepAlives,
+	// 	MaxIdleConns:        c.MaxIdleConns,
+	// 	IdleConnTimeout:     90 * time.Second, // setting the value to golang default transport
+	// 	MaxIdleConnsPerHost: c.MaxIdleConnsPerHost,
+	// 	DisableCompression:  true,
+	// 	TLSClientConfig:     tlsConfig,
+	// }
 
-	rproxy := &httputil.ReverseProxy{
-		Director:       p.setupProxyRequest,
-		Transport:      p.proxyRoundTripper(httpTransport, c.Port),
-		FlushInterval:  50 * time.Millisecond,
-		BufferPool:     p.bufferPool,
-		ModifyResponse: p.modifyResponse,
-	}
+	// rproxy := &httputil.ReverseProxy{
+	// 	Director:       p.setupProxyRequest,
+	// 	Transport:      p.proxyRoundTripper(httpTransport, c.Port),
+	// 	FlushInterval:  50 * time.Millisecond,
+	// 	BufferPool:     p.bufferPool,
+	// 	ModifyResponse: p.modifyResponse,
+	// }
 
 	zipkinHandler := handlers.NewZipkin(c.Tracing.EnableZipkin, c.ExtraHeadersToLog, logger)
 	n := negroni.New()
@@ -120,6 +115,9 @@ func NewProxy(
 	n.Use(handlers.NewLookup(registry, reporter, logger, c.Backends.MaxConns))
 	n.Use(handlers.NewRouteService(routeServiceConfig, logger, registry))
 	n.Use(p)
+	// handler --> RoundTrip ?
+	// have a handler that appends to map of [app_guid]transport
+	rproxy := handlers.NewRoundTrip(c, tlsConfig, logger, reporter)
 	n.UseHandler(rproxy)
 
 	return n
@@ -135,37 +133,6 @@ func hostWithoutPort(req *http.Request) string {
 	}
 
 	return host
-}
-
-func (p *proxy) proxyRoundTripper(transport round_tripper.ProxyRoundTripper, port uint16) round_tripper.ProxyRoundTripper {
-	return round_tripper.NewProxyRoundTripper(
-		round_tripper.NewDropsondeRoundTripper(transport),
-		p.logger, p.traceKey, p.ip, p.defaultLoadBalance,
-		p.reporter, p.secureCookies,
-		port,
-	)
-}
-
-type bufferPool struct {
-	pool *sync.Pool
-}
-
-func NewBufferPool() httputil.BufferPool {
-	return &bufferPool{
-		pool: new(sync.Pool),
-	}
-}
-
-func (b *bufferPool) Get() []byte {
-	buf := b.pool.Get()
-	if buf == nil {
-		return make([]byte, 8192)
-	}
-	return buf.([]byte)
-}
-
-func (b *bufferPool) Put(buf []byte) {
-	b.pool.Put(buf)
 }
 
 func (p *proxy) ServeHTTP(responseWriter http.ResponseWriter, request *http.Request, next http.HandlerFunc) {
@@ -204,27 +171,6 @@ func (p *proxy) ServeHTTP(responseWriter http.ResponseWriter, request *http.Requ
 	}
 
 	next(responseWriter, request)
-}
-
-func (p *proxy) setupProxyRequest(target *http.Request) {
-	if p.forceForwardedProtoHttps {
-		target.Header.Set("X-Forwarded-Proto", "https")
-	} else if target.Header.Get("X-Forwarded-Proto") == "" {
-		scheme := "http"
-		if target.TLS != nil {
-			scheme = "https"
-		}
-		target.Header.Set("X-Forwarded-Proto", scheme)
-	}
-
-	target.URL.Scheme = "http"
-	target.URL.Host = target.Host
-	target.URL.Opaque = target.RequestURI
-	target.URL.RawQuery = ""
-	target.URL.ForceQuery = false
-
-	handler.SetRequestXRequestStart(target)
-	target.Header.Del(router_http.CfAppInstance)
 }
 
 func (p *proxy) modifyResponse(backendResp *http.Response) error {
