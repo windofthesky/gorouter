@@ -107,6 +107,7 @@ type Config struct {
 	Nats                     []NatsConfig  `yaml:"nats"`
 	Logging                  LoggingConfig `yaml:"logging"`
 	Port                     uint16        `yaml:"port"`
+	UnixSocket               string        `yaml:"unix_socket"`
 	Index                    uint          `yaml:"index"`
 	Zone                     string        `yaml:"zone"`
 	GoMaxProcs               int           `yaml:"go_max_procs,omitempty"`

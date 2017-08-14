@@ -3,6 +3,7 @@ package router_test
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -76,6 +77,7 @@ var _ = Describe("Router", func() {
 		cert := test_util.CreateCert("default")
 		config.SSLCertificates = []tls.Certificate{cert}
 		config.CipherSuites = []uint16{tls.TLS_RSA_WITH_AES_256_CBC_SHA}
+		config.UnixSocket = test_util.TempUnixSocket()
 
 		natsRunner = test_util.NewNATSRunner(int(natsPort))
 		natsRunner.Start()
@@ -377,6 +379,44 @@ var _ = Describe("Router", func() {
 			router = nil
 
 			req, err = http.NewRequest("GET", host, nil)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = client.Do(req)
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("no longer proxies unix", func() {
+			app := testcommon.NewTestApp([]route.Uri{"greet.vcap.me"}, config.Port, mbusClient, nil, "")
+
+			app.AddHandler("/foo", func(w http.ResponseWriter, r *http.Request) {
+				_, err := ioutil.ReadAll(r.Body)
+				defer r.Body.Close()
+				Expect(err).ToNot(HaveOccurred())
+				w.WriteHeader(http.StatusNoContent)
+			})
+			app.RegisterAndListen()
+			Eventually(func() bool {
+				return appRegistered(registry, app)
+			}).Should(BeTrue())
+
+			req, err := http.NewRequest("GET", "http://greet.vcap.me/foo", nil)
+			Expect(err).ToNot(HaveOccurred())
+
+			tr := &http.Transport{
+				DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+					return net.Dial("unix", config.UnixSocket)
+				},
+			}
+			client := http.Client{Transport: tr}
+			resp, err := client.Do(req)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(resp).ToNot(BeNil())
+			resp.Body.Close()
+			Expect(resp.StatusCode).To(Equal(http.StatusNoContent))
+
+			router.Stop()
+			router = nil
+
+			req, err = http.NewRequest("GET", "http://greet.vcap.me/foo", nil)
 			Expect(err).NotTo(HaveOccurred())
 			_, err = client.Do(req)
 			Expect(err).To(HaveOccurred())
@@ -1246,6 +1286,35 @@ var _ = Describe("Router", func() {
 				Expect(bytes).To(ContainSubstring("Hello"))
 				defer resp.Body.Close()
 			})
+		})
+	})
+
+	Context("serving unix", func() {
+		It("serves unix traffic", func() {
+			app := test.NewGreetApp([]route.Uri{"test.vcap.me"}, config.Port, mbusClient, nil)
+			app.RegisterAndListen()
+			Eventually(func() bool {
+				return appRegistered(registry, app)
+			}).Should(BeTrue())
+
+			req, _ := http.NewRequest("GET", "http://test.vcap.me/", nil)
+			tr := &http.Transport{
+				DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+					return net.Dial("unix", config.UnixSocket)
+				},
+			}
+			client := http.Client{Transport: tr}
+
+			resp, err := client.Do(req)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(resp).ToNot(BeNil())
+
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+			bytes, err := ioutil.ReadAll(resp.Body)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(bytes).To(ContainSubstring("Hello"))
+			defer resp.Body.Close()
 		})
 	})
 })

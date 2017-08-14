@@ -52,8 +52,10 @@ type Router struct {
 	varz       varz.Varz
 	component  *common.VcapComponent
 
-	listener         net.Listener
-	tlsListener      net.Listener
+	listener     net.Listener
+	tlsListener  net.Listener
+	unixListener net.Listener
+
 	closeConnections bool
 	connLock         sync.Mutex
 	idleConns        map[net.Conn]struct{}
@@ -61,6 +63,7 @@ type Router struct {
 	drainDone        chan struct{}
 	serveDone        chan struct{}
 	tlsServeDone     chan struct{}
+	unixServeDone    chan struct{}
 	stopping         bool
 	stopLock         sync.Mutex
 	uptimeMonitor    *monitor.Uptime
@@ -108,20 +111,21 @@ func NewRouter(logger logger.Logger, cfg *config.Config, p proxy.Proxy, mbusClie
 	}
 
 	router := &Router{
-		config:       cfg,
-		proxy:        p,
-		mbusClient:   mbusClient,
-		registry:     r,
-		varz:         v,
-		component:    component,
-		serveDone:    make(chan struct{}),
-		tlsServeDone: make(chan struct{}),
-		idleConns:    make(map[net.Conn]struct{}),
-		activeConns:  make(map[net.Conn]struct{}),
-		logger:       logger,
-		errChan:      routerErrChan,
-		HeartbeatOK:  heartbeatOK,
-		stopping:     false,
+		config:        cfg,
+		proxy:         p,
+		mbusClient:    mbusClient,
+		registry:      r,
+		varz:          v,
+		component:     component,
+		serveDone:     make(chan struct{}),
+		tlsServeDone:  make(chan struct{}),
+		unixServeDone: make(chan struct{}),
+		idleConns:     make(map[net.Conn]struct{}),
+		activeConns:   make(map[net.Conn]struct{}),
+		logger:        logger,
+		errChan:       routerErrChan,
+		HeartbeatOK:   heartbeatOK,
+		stopping:      false,
 	}
 
 	if err := router.component.Start(); err != nil {
@@ -166,6 +170,12 @@ func (r *Router) Run(signals <-chan os.Signal, ready chan<- struct{}) error {
 		return err
 	}
 	err = r.serveHTTPS(server, r.errChan)
+	if err != nil {
+		r.errChan <- err
+		return err
+	}
+
+	err = r.serveUNIX(server, r.errChan)
 	if err != nil {
 		r.errChan <- err
 		return err
@@ -329,6 +339,34 @@ func (r *Router) serveHTTP(server *http.Server, errChan chan error) error {
 	return nil
 }
 
+func (r *Router) serveUNIX(server *http.Server, errChan chan error) error {
+	if r.config.UnixSocket != "" {
+		listener, err := net.Listen("unix", r.config.UnixSocket)
+		if err != nil {
+			r.logger.Fatal("unix-listener-error", zap.Error(err))
+			return err
+		}
+
+		r.unixListener = listener
+
+		r.logger.Info("unix-listener-started", zap.Object("address", r.unixListener.Addr()))
+
+		go func() {
+			err := server.Serve(r.unixListener)
+			r.stopLock.Lock()
+			if !r.stopping {
+				errChan <- err
+			}
+			r.stopLock.Unlock()
+
+			close(r.unixServeDone)
+		}()
+	} else {
+		r.logger.Info("unix-listener-not-enabled")
+	}
+	return nil
+}
+
 func (r *Router) Drain(drainWait, drainTimeout time.Duration) error {
 	atomic.StoreInt32(r.HeartbeatOK, 0)
 
@@ -403,6 +441,11 @@ func (r *Router) stopListening() {
 	if r.tlsListener != nil {
 		r.tlsListener.Close()
 		<-r.tlsServeDone
+	}
+
+	if r.unixListener != nil {
+		r.unixListener.Close()
+		<-r.unixServeDone
 	}
 }
 

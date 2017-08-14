@@ -196,6 +196,7 @@ logging:
 		It("sets the rest of config", func() {
 			var b = []byte(`
 port: 8082
+unix_socket: /path/to/foo
 index: 1
 go_max_procs: 2
 trace_key: "foo"
@@ -211,6 +212,7 @@ routing_table_sharding_mode: "segments"
 			Expect(err).ToNot(HaveOccurred())
 
 			Expect(config.Port).To(Equal(uint16(8082)))
+			Expect(config.UnixSocket).To(Equal("/path/to/foo"))
 			Expect(config.Index).To(Equal(uint(1)))
 			Expect(config.GoMaxProcs).To(Equal(2))
 			Expect(config.TraceKey).To(Equal("foo"))
