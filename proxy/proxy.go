@@ -117,7 +117,7 @@ func NewProxy(
 	n.Use(p)
 	// handler --> RoundTrip ?
 	// have a handler that appends to map of [app_guid]transport
-	rproxy := handlers.NewRoundTrip(c, tlsConfig, logger, reporter)
+	rproxy := handlers.NewRoundTrip(c, logger, reporter)
 	n.UseHandler(rproxy)
 
 	return n

@@ -26,7 +26,37 @@ publish_active_apps_interval: 0 # 0 means disabled
 secure_cookies: true
 route_service_timeout: 60s
 route_services_secret: "tWPE+sWJq+ZnGJpyKkIPYg=="
-
+ca_certs:
+  - |
+    -----BEGIN CERTIFICATE-----
+    MIIE6DCCAtCgAwIBAgIBATANBgkqhkiG9w0BAQsFADAUMRIwEAYDVQQDEwlsb2Nh
+    bGhvc3QwHhcNMTcwODE0MjI0NDQ4WhcNMjcwODE0MjI0NDUzWjAUMRIwEAYDVQQD
+    Ewlsb2NhbGhvc3QwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQDLybsl
+    L9Rr8nEwIAmpvLFgbNK+QahjLSE0sPiKRBN8OmdM8dzZPZpdV92zJJZ16Hlw8XRg
+    4bo5m1whnMo5Gkseellv0F31C64xoqnS5P63dcATI5+aqfJRP6C+b1Td5UW2Z0Mk
+    jiM/o5EjRjOyz8+A0SMSTOdUrz35dCibzqazauXrecBPUvU2tuwu48cTTG/mrwU3
+    A/Oq9iG1yajQ19eiAo/0BOZVe+MzzW71BUVmhnk7UZzMvQjRdwrRCt63AaITsB3s
+    9SsEd0ALp3qtcdDAIIAS9AVt0SU1WxiWO98DpMbTreInK8iKgy0qUeey5nCx15K/
+    ymUUVM39IXlzGkC0Qt18jjZ42jPz4M63HmPxHOBwN+SrXntl1ng7uib8XqJzvdYv
+    cA3o5GiWmEa5CixupaTIuhp+9dlC6Q7JkHGClqZ4usfAS6QkjcVGydUulniq/4hg
+    +szz04g7FCjSBziPTdRzA2KdwBYc3i91CHUC3vmN1yoNPCoaKrdxreLomsGjIE5l
+    yxEcrh2GARR/PUYA7Cq2AIwoCfbPhHsKmPfQcQnMoaqqFvXYicPKjUrT6lvEVNAH
+    fcARZ5JaT5nwgp6MtT7sXtW/c7JSlzeuegi5ffDX0GiGVTLrQW0NWnkCwtb17odJ
+    IxKCtWjNrFvjgWZ2EeDhcfHWxcibCtWkm3MnqwIDAQABo0UwQzAOBgNVHQ8BAf8E
+    BAMCAQYwEgYDVR0TAQH/BAgwBgEB/wIBADAdBgNVHQ4EFgQUWag/dwLpCmdgNG9+
+    MsTOFYYFu6MwDQYJKoZIhvcNAQELBQADggIBAGP2HwDs2HdYMjc+ODDbBJZ1yxDr
+    1bBFdJufv61yedFhhzkSonjeczBqt5Sge9UftKcDtTlxw1YAFmEn5rMAKL0H8+/O
+    mZNTk7Pb7csuUykor3mdrgIi4gDb65IiUYk8pjx3AKJn2mu57UnCjL0pIgl1sl0m
+    /p+lHxJ+iG/IUoN+4aKTPCQf1FdBJDMbcxaBb3RMunWoEXQwSs6bdELCO8gcOLxV
+    btgutUZFyeH+C/sMs9aBehafaE0U+RNAzY+LPxfRVBYqZRFWtxm1XQ2tNXammhWO
+    g4CjXreo4mjz3U+x4xyML5t8bAWvXgK5AYyfTULAN7QFdyDtUpLJbpU2r/NQKBKF
+    Zm24Ce4znN1IknYWeyA7qP5kD1SZlgAjlzF3RrPmoJo4bX7XcFVXS/Ycsthm0Tj4
+    4ctrZJ1uRCE4Wr8tm5+wXAalj6+BVyPv0aeVggC5FOo+5acQx3ktO4eqk+r6mk56
+    gRjKkff1oAzYqD88XRrA8Nmx6Zmm0ATQsSbrVQkBLMqViAoNkJvsiGhsA8KGTRLB
+    oTbP20aeTSfuWi3bMvnZGfqP3T1Cff1gD4TffnYrfQlmLWNyNz8E5Cl0gyPKjIza
+    hdGjWG34ZAirRNN5fu41w92L9wQN8hA+DWxWPkjURV5pMsjNbgtY9lQwO/88i7Pk
+    xhBZ1EX107bUGnbz
+    -----END CERTIFICATE-----
 extra_headers_to_log:
   - Span-Id
   - Trace-Id

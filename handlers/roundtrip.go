@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/uber-go/zap"
+
 	router_http "code.cloudfoundry.org/gorouter/common/http"
 	"code.cloudfoundry.org/gorouter/config"
 	"code.cloudfoundry.org/gorouter/logger"
@@ -22,17 +24,46 @@ type roundTrip struct {
 	reporter  metrics.CombinedReporter
 }
 
-func NewRoundTrip(c *config.Config, tlsConfig *tls.Config,
+func NewRoundTrip(c *config.Config,
 	logger logger.Logger, reporter metrics.CombinedReporter) *roundTrip {
 	return &roundTrip{
-		c:         c,
-		tlsConfig: tlsConfig,
-		logger:    logger,
-		reporter:  reporter,
+		c: c,
+		//	tlsConfig: tlsConfig,
+		logger:   logger,
+		reporter: reporter,
 	}
 }
 
 func (r *roundTrip) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	reqInfo, err := ContextRequestInfo(req)
+	if err != nil {
+		r.logger.Fatal("request-info-err", zap.Error(err))
+		return
+	}
+	var instanceId string
+
+	if reqInfo.RoutePool != nil {
+		r.logger.Info("setting the instance ID")
+		// pool
+		// endpoints
+		// next()
+		// for res(?) {
+		// next()
+		// }
+		// for each endpoint you will set the transport
+		// // newIter handler -- > pool --> endpoint
+		// roundtrip --> req_info --> make a conn to endpoint
+		// next endpoint ..? / 1 endpoint .. mark(endpoint)
+		instanceId = reqInfo.RouteEndpoint.PrivateInstanceId
+	}
+	tlsConfig := &tls.Config{
+		CipherSuites:       r.c.CipherSuites,
+		InsecureSkipVerify: false,
+		RootCAs:            r.c.CAPool,
+		ClientAuth:         tls.RequireAndVerifyClientCert,
+		ServerName:         instanceId,
+	}
+
 	httpTransport := &http.Transport{
 		Dial: func(network, addr string) (net.Conn, error) {
 			conn, err := net.DialTimeout(network, addr, 5*time.Second)
@@ -49,7 +80,7 @@ func (r *roundTrip) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		IdleConnTimeout:     90 * time.Second, // setting the value to golang default transport
 		MaxIdleConnsPerHost: r.c.MaxIdleConnsPerHost,
 		DisableCompression:  true,
-		TLSClientConfig:     r.tlsConfig,
+		TLSClientConfig:     tlsConfig,
 	}
 
 	rproxy := &httputil.ReverseProxy{
@@ -60,7 +91,6 @@ func (r *roundTrip) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		//		ModifyResponse: p.modifyResponse,
 	}
 	rproxy.ServeHTTP(rw, req)
-
 }
 
 func (r *roundTrip) proxyRoundTripper(transport ProxyRoundTripper, port uint16) ProxyRoundTripper {
