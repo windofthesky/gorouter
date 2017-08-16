@@ -90,13 +90,13 @@ func NewProxy(
 	// 	TLSClientConfig:     tlsConfig,
 	// }
 
-	// rproxy := &httputil.ReverseProxy{
-	// 	Director:       p.setupProxyRequest,
-	// 	Transport:      p.proxyRoundTripper(httpTransport, c.Port),
-	// 	FlushInterval:  50 * time.Millisecond,
-	// 	BufferPool:     p.bufferPool,
-	// 	ModifyResponse: p.modifyResponse,
-	// }
+	//	rproxy := &httputil.ReverseProxy{
+	//		Director:       p.setupProxyRequest,
+	//		Transport:      p.proxyRoundTripper(httpTransport, c.Port),
+	//		FlushInterval:  50 * time.Millisecond,
+	//		BufferPool:     p.bufferPool,
+	//		ModifyResponse: p.modifyResponse,
+	//	}
 
 	zipkinHandler := handlers.NewZipkin(c.Tracing.EnableZipkin, c.ExtraHeadersToLog, logger)
 	n := negroni.New()

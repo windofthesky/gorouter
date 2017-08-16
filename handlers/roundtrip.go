@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"crypto/tls"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -40,28 +41,23 @@ func (r *roundTrip) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		r.logger.Fatal("request-info-err", zap.Error(err))
 		return
 	}
-	var instanceId string
 
+	//	var privateInstanceId string
 	if reqInfo.RoutePool != nil {
 		r.logger.Info("setting the instance ID")
-		// pool
-		// endpoints
-		// next()
-		// for res(?) {
-		// next()
-		// }
-		// for each endpoint you will set the transport
-		// // newIter handler -- > pool --> endpoint
-		// roundtrip --> req_info --> make a conn to endpoint
-		// next endpoint ..? / 1 endpoint .. mark(endpoint)
-		instanceId = reqInfo.RouteEndpoint.PrivateInstanceId
+		stickyEndpointID := getStickySession(req)
+		iter := reqInfo.RoutePool.Endpoints(r.c.LoadBalance, stickyEndpointID)
+		endpoint := iter.Next()
+		r.logger.Info(fmt.Sprintf("endpoint ====> %+v\n", endpoint))
+		//	privateInstanceId = endpoint.PrivateInstanceId
 	}
+
 	tlsConfig := &tls.Config{
 		CipherSuites:       r.c.CipherSuites,
 		InsecureSkipVerify: false,
 		RootCAs:            r.c.CAPool,
-		ClientAuth:         tls.RequireAndVerifyClientCert,
-		ServerName:         instanceId,
+		//ClientAuth:         tls.RequireAndVerifyClientCert,
+		//	ServerName:         privateInstanceId,
 	}
 
 	httpTransport := &http.Transport{
