@@ -74,6 +74,8 @@ func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error)
 	var res *http.Response
 	var endpoint *route.Endpoint
 
+	rt.logger.Info("\n\n\nfooooooooooooooooooo\n\n\n")
+
 	if request.Body != nil {
 		closer := request.Body
 		request.Body = ioutil.NopCloser(request.Body)
@@ -100,6 +102,7 @@ func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error)
 	logger := rt.logger
 	for retry := 0; retry < handler.MaxRetries; retry++ {
 		logger = rt.logger
+		logger.Info("qqqqqqqqqqqqqqqqqqqqqq")
 
 		if reqInfo.RouteServiceURL == nil {
 			endpoint, err = rt.selectEndpoint(iter, request)
@@ -129,7 +132,9 @@ func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error)
 			request.Host = reqInfo.RouteServiceURL.Host
 			request.URL = new(url.URL)
 			*request.URL = *reqInfo.RouteServiceURL
+			logger.Info("yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy")
 			if reqInfo.IsInternalRouteService {
+				logger.Info("xxxxxxxxxxxxxxxxxxxxxxxxxx setting url to HTTP")
 				request.URL.Scheme = "http"
 				request.URL.Host = fmt.Sprintf("localhost:%d", rt.localPort)
 			}

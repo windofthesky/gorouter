@@ -42,22 +42,22 @@ func (r *roundTrip) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	//	var privateInstanceId string
+	var privateInstanceId string
 	if reqInfo.RoutePool != nil {
 		r.logger.Info("setting the instance ID")
 		stickyEndpointID := getStickySession(req)
 		iter := reqInfo.RoutePool.Endpoints(r.c.LoadBalance, stickyEndpointID)
 		endpoint := iter.Next()
 		r.logger.Info(fmt.Sprintf("endpoint ====> %+v\n", endpoint))
-		//	privateInstanceId = endpoint.PrivateInstanceId
+		privateInstanceId = endpoint.PrivateInstanceId
 	}
 
 	tlsConfig := &tls.Config{
 		CipherSuites:       r.c.CipherSuites,
 		InsecureSkipVerify: false,
 		RootCAs:            r.c.CAPool,
-		//ClientAuth:         tls.RequireAndVerifyClientCert,
-		//	ServerName:         privateInstanceId,
+		ClientAuth:         tls.RequireAndVerifyClientCert,
+		ServerName:         privateInstanceId,
 	}
 
 	httpTransport := &http.Transport{
@@ -86,6 +86,7 @@ func (r *roundTrip) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		BufferPool:    NewBufferPool(),
 		//		ModifyResponse: p.modifyResponse,
 	}
+
 	rproxy.ServeHTTP(rw, req)
 }
 
