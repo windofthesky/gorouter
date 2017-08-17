@@ -56,3 +56,19 @@ func (r *RequestInfoHandler) ServeHTTP(w http.ResponseWriter, req *http.Request,
 	reqInfo.StartedAt = time.Now()
 	next(w, req)
 }
+
+func GetExpectedServerCommonName(ctx context.Context) (string, error) {
+	ri := ctx.Value(requestInfoCtxKey)
+	if ri == nil {
+		return "", errors.New("RequestInfo not set on context")
+	}
+	reqInfo, ok := ri.(*RequestInfo)
+	if !ok {
+		return "", errors.New("RequestInfo is not the correct type")
+	}
+	ep := reqInfo.RouteEndpoint
+	if ep == nil {
+		return "", errors.New("no endpoint set on context")
+	}
+	return ep.PrivateInstanceId, nil
+}

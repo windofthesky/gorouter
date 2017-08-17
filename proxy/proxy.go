@@ -1,8 +1,10 @@
 package proxy
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -77,15 +79,30 @@ func NewProxy(
 	}
 
 	httpTransport := &http.Transport{
-		Dial: func(network, addr string) (net.Conn, error) {
-			conn, err := net.DialTimeout(network, addr, 5*time.Second)
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			// inspect ctx to see if we should do TLS?
+			dialer := &net.Dialer{
+				Timeout: 5 * time.Second,
+			}
+			conn, err := tls.DialWithDialer(dialer, network, addr, tlsConfig)
+			// conn, err := net.DialTimeout(network, addr, 5*time.Second)
 			if err != nil {
-				return conn, err
+				return nil, err
 			}
 			if c.EndpointTimeout > 0 {
 				err = conn.SetDeadline(time.Now().Add(c.EndpointTimeout))
 			}
-			return conn, err
+			connectionState := conn.ConnectionState()
+			serverCert := connectionState.VerifiedChains[0][0]
+			serverCommonName := serverCert.Subject.CommonName
+			expectedServerCommonName, err := handlers.GetExpectedServerCommonName(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if serverCommonName != expectedServerCommonName {
+				return nil, fmt.Errorf("routing integrity validation check failed: expected %s but got %s", expectedServerCommonName, serverCommonName)
+			}
+			return conn, nil
 		},
 		DisableKeepAlives:   c.DisableKeepAlives,
 		MaxIdleConns:        c.MaxIdleConns,

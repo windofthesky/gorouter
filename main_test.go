@@ -227,7 +227,7 @@ var _ = Describe("Router Integration", func() {
 		})
 		Context("when backend registration includes TLS port", func() {
 			Context("when backend is listening for TLS connections", func() {
-				It("successfully connects to backend using TLS connection", func() {
+				FIt("successfully connects to backend using TLS connection", func() {
 					localIP, err := localip.LocalIP()
 					mbusClient, err := newMessageBus(config)
 					Expect(err).ToNot(HaveOccurred())
