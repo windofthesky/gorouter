@@ -107,11 +107,12 @@ func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error)
 				break
 			}
 			logger = logger.With(zap.Nest("route-endpoint", endpoint.ToLogData()...))
+			reqInfo.RouteEndpoint = endpoint
 
 			logger.Debug("backend", zap.Int("attempt", retry))
-			if endpoint.IsTLS() {
-				request.URL.Scheme = "https"
-			}
+			// if endpoint.IsTLS() {
+			// 	request.URL.Scheme = "https"
+			// }
 			res, err = rt.backendRoundTrip(request, endpoint, iter)
 			if err == nil || !retryableError(err) {
 				break

@@ -1,8 +1,10 @@
 package proxy
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -77,10 +79,42 @@ func NewProxy(
 	}
 
 	httpTransport := &http.Transport{
-		Dial: func(network, addr string) (net.Conn, error) {
-			conn, err := net.DialTimeout(network, addr, 5*time.Second)
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			var conn net.Conn
+			endpoint, err := handlers.GetEndpoint(ctx)
+
 			if err != nil {
-				return conn, err
+				panic("REMOVE ME!! error from get endpoint helper func: " + err.Error())
+			}
+			if endpoint.IsTLS() {
+				dialer := &net.Dialer{
+					Timeout: 5 * time.Second,
+				}
+				tlsConn, err := tls.DialWithDialer(dialer, network, addr, tlsConfig)
+				if err != nil {
+					panic("REMOVE ME!! error from dialing TLS conn")
+				}
+				conn = tlsConn
+				connectionState := tlsConn.ConnectionState()
+				verifiedChains := connectionState.VerifiedChains
+				if len(verifiedChains) == 0 {
+					panic("REMOVE ME!! this should never happen: no verified chains!")
+				}
+				firstChain := verifiedChains[0]
+				if len(firstChain) == 0 {
+					panic("REMOVE ME!! this should never happen: no verified chains!")
+				}
+				serverCert := firstChain[0] // TODO: can we rely on this being the leaf cert?
+				serverCommonName := serverCert.Subject.CommonName
+
+				if serverCommonName != endpoint.PrivateInstanceId {
+					return nil, fmt.Errorf("integrity validation failed: expected %s but got %s", endpoint.PrivateInstanceId, serverCommonName)
+				}
+			} else {
+				conn, err = net.DialTimeout(network, addr, 5*time.Second)
+				if err != nil {
+					return conn, err
+				}
 			}
 			if c.EndpointTimeout > 0 {
 				err = conn.SetDeadline(time.Now().Add(c.EndpointTimeout))

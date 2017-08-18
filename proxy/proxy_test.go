@@ -3,6 +3,7 @@ package proxy_test
 import (
 	"bytes"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	router_http "code.cloudfoundry.org/gorouter/common/http"
+	"code.cloudfoundry.org/gorouter/common/uuid"
 	"code.cloudfoundry.org/gorouter/config"
 	"code.cloudfoundry.org/gorouter/handlers"
 	"code.cloudfoundry.org/gorouter/registry"
@@ -28,7 +30,7 @@ import (
 	"code.cloudfoundry.org/routing-api/models"
 	"github.com/cloudfoundry/dropsonde/factories"
 	"github.com/cloudfoundry/sonde-go/events"
-	uuid "github.com/nu7hatch/gouuid"
+	gouuid "github.com/nu7hatch/gouuid"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -882,7 +884,7 @@ var _ = Describe("Proxy", func() {
 		Eventually(done).Should(Receive())
 
 		Eventually(findStartStopEvent).ShouldNot(BeNil())
-		u2, err := uuid.ParseHex(vcapHeader)
+		u2, err := gouuid.ParseHex(vcapHeader)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(findStartStopEvent().RequestId).To(Equal(factories.NewUUID(u2)))
 	})
@@ -1918,6 +1920,65 @@ var _ = Describe("Proxy", func() {
 			Expect(fakeReporter.CaptureRoutingResponseLatencyCallCount()).To(Equal(0))
 		})
 	})
+	// backend has UseTLS(), then scheme=http and connection flows only if backend cert CN matches endpoing private instance id
+	Context("when the backend is registered with a TLS port", func() {
+		FContext("when the application is listening with a TLS connection", func() {
+			var (
+				serverCertAndKey  tls.Certificate
+				privateInstanceId string
+			)
+			BeforeEach(func() {
+				var err error
+				privateInstanceId, err = uuid.GenerateUUID()
+				Expect(err).ToNot(HaveOccurred())
+				certChain := test_util.CreateSignedCertWithRootCA(privateInstanceId)
+				caCertPool = x509.NewCertPool()
+				caCertPool.AddCert(certChain.CACert)
+				serverCertAndKey, err = tls.X509KeyPair(certChain.CertPEM, certChain.PrivKeyPEM)
+				Expect(err).ToNot(HaveOccurred())
+			})
+			Context("when the PrivateInstanceId matches the backend cert common name", func() {
+				It("successfully connects", func() {
+					ln := registerHandlerWithAppIdWithTLS(r, "vcap.testapp.me", "", func(conn *test_util.HttpConn) {
+						conn.CheckLine("GET / HTTP/1.1")
+						resp := test_util.NewResponse(http.StatusOK)
+						conn.WriteResponse(resp)
+						conn.Close()
+					}, privateInstanceId, "", serverCertAndKey)
+					defer ln.Close()
+
+					conn := dialProxy(proxyServer)
+
+					req := test_util.NewRequest("GET", "vcap.testapp.me", "/", nil)
+					conn.WriteRequest(req)
+
+					res, _ := conn.ReadResponse()
+					Expect(res.StatusCode).To(Equal(http.StatusOK))
+				})
+			})
+			Context("when the PrivateInstanceId does not match the backend cert common name", func() {
+				It("errors with HTTP status code 503", func() {
+					ln := registerHandlerWithAppIdWithTLS(r, "vcap.testapp.me", "", func(conn *test_util.HttpConn) {
+						conn.CheckLine("GET / HTTP/1.1")
+						resp := test_util.NewResponse(http.StatusOK)
+						conn.WriteResponse(resp)
+						conn.Close()
+					}, "WRONG_INSTANCE_ID", "", serverCertAndKey)
+					defer ln.Close()
+
+					conn := dialProxy(proxyServer)
+
+					req := test_util.NewRequest("GET", "vcap.testapp.me", "/", nil)
+					conn.WriteRequest(req)
+
+					res, _ := conn.ReadResponse()
+					Expect(res.StatusCode).To(Equal(http.StatusServiceUnavailable))
+
+				})
+			})
+		})
+	})
+	//
 })
 
 // HACK: this is used to silence any http warnings in logs
@@ -1970,15 +2031,10 @@ func registerHandlerWithAppId(reg *registry.RouteRegistry, path string, routeSer
 	return ln
 }
 
-func registerHandlerWithAppIdWithTLS(reg *registry.RouteRegistry, path string, routeServiceUrl string, handler connHandler, instanceId, appId string) net.Listener {
-	certFile := "../test/assets/certs/server.pem"
-	keyFile := "../test/assets/certs/server.key"
-
-	var config *tls.Config
-	config = &tls.Config{}
-	certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
-	Expect(err).NotTo(HaveOccurred())
-	config.Certificates = append(config.Certificates, certificate)
+func registerHandlerWithAppIdWithTLS(reg *registry.RouteRegistry, path string, routeServiceUrl string, handler connHandler, instanceId, appId string, serverCertAndKey tls.Certificate) net.Listener {
+	config := &tls.Config{
+		Certificates: []tls.Certificate{serverCertAndKey},
+	}
 
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", config)
 	Expect(err).NotTo(HaveOccurred())

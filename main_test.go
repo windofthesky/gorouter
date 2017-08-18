@@ -238,8 +238,11 @@ var _ = Describe("Router Integration", func() {
 		AfterEach(func() {
 			gorouterSession.Kill()
 		})
+
 		Context("when backend registration includes TLS port", func() {
+
 			Context("when backend is listening for TLS connections", func() {
+
 				Context("when registered instance id matches the common name on cert presented by the backend", func() {
 					It("successfully connects to backend using TLS", func() {
 						runningApp1 := test.NewGreetApp([]route.Uri{"innocent.bystander.vcap.me"}, proxyPort, mbusClient, nil)
@@ -262,6 +265,27 @@ var _ = Describe("Router Integration", func() {
 					})
 				})
 
+				Context("when registered instance id does not match the common name on cert presented by the backend", func() {
+					FIt("fails the connection to the backend with 503 Service Unavailable error", func() {
+						runningApp1 := test.NewGreetApp([]route.Uri{"innocent.bystander.vcap.me"}, proxyPort, mbusClient, nil)
+						runningApp1.TlsRegister("wrong-instance-id")
+						runningApp1.TlsListen(certChain.CertPEM, certChain.PrivKeyPEM)
+						heartbeatInterval := 200 * time.Millisecond
+						runningTicker := time.NewTicker(heartbeatInterval)
+						go func() {
+							for {
+								select {
+								case <-runningTicker.C:
+									runningApp1.TlsRegister(privateInstanceId)
+								}
+							}
+						}()
+						routesUri := fmt.Sprintf("http://%s:%s@%s:%d/routes", config.Status.User, config.Status.Pass, localIP, statusPort)
+
+						Eventually(func() bool { return appRegistered(routesUri, runningApp1) }).Should(BeTrue())
+						runningApp1.VerifyAppStatus(503)
+					})
+				})
 			})
 
 			Context("when backend is only listening for non TLS connections", func() {

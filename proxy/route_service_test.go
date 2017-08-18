@@ -2,6 +2,7 @@ package proxy_test
 
 import (
 	"bytes"
+	"crypto/tls"
 	"crypto/x509"
 	"io/ioutil"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"code.cloudfoundry.org/gorouter/common/secure"
+	"code.cloudfoundry.org/gorouter/common/uuid"
 	"code.cloudfoundry.org/gorouter/routeservice"
 	"code.cloudfoundry.org/gorouter/test_util"
 	. "github.com/onsi/ginkgo"
@@ -418,8 +420,17 @@ var _ = Describe("Route Services", func() {
 		})
 
 		Context("when registration message contains tls_port", func() {
+			var (
+				serverCertAndKey tls.Certificate
+			)
 			BeforeEach(func() {
-				conf.SkipSSLValidation = true
+				privateInstanceId, _ := uuid.GenerateUUID()
+				certChain := test_util.CreateSignedCertWithRootCA(privateInstanceId)
+				caCertPool = x509.NewCertPool()
+				caCertPool.AddCert(certChain.CACert)
+				var err error
+				serverCertAndKey, err = tls.X509KeyPair(certChain.CertPEM, certChain.PrivKeyPEM)
+				Expect(err).ToNot(HaveOccurred())
 			})
 
 			It("successfully looks up the route service and sends the request", func() {
@@ -444,12 +455,10 @@ var _ = Describe("Route Services", func() {
 					conn.WriteResponse(resp)
 				}
 
-				rsListener := registerHandlerWithAppIdWithTLS(r, "route_service.com", "", routeServiceHandler, "", "my-route-service-app-id")
+				rsListener := registerHandlerWithAppIdWithTLS(r, "route_service.com", "", routeServiceHandler, "", "my-route-service-app-id", serverCertAndKey)
 				appListener := registerHandlerWithRouteService(r, "my_app.com", "https://route_service.com", func(conn *test_util.HttpConn) {
 					defer GinkgoRecover()
-					resp := test_util.NewResponse(http.StatusOK)
-					conn.WriteResponse(resp)
-					Fail("Should not get here")
+					Fail("Will not get here, since our fake route service above doesn't initiate a new request")
 				})
 				defer func() {
 					Expect(rsListener.Close()).ToNot(HaveErrored())
