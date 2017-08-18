@@ -45,6 +45,14 @@ func (t *testBody) Close() error {
 	return nil
 }
 
+type FakeRoundTripperFactory struct {
+	ReturnValue round_tripper.ProxyRoundTripper
+}
+
+func (f *FakeRoundTripperFactory) New(expectedServerName string) round_tripper.ProxyRoundTripper {
+	return f.ReturnValue
+}
+
 var _ = Describe("ProxyRoundTripper", func() {
 	Context("RoundTrip", func() {
 		var (
@@ -106,7 +114,8 @@ var _ = Describe("ProxyRoundTripper", func() {
 			combinedReporter = new(fakes.FakeCombinedReporter)
 
 			proxyRoundTripper = round_tripper.NewProxyRoundTripper(
-				transport, logger, "my_trace_key", routerIP, "",
+				&FakeRoundTripperFactory{ReturnValue: transport},
+				logger, "my_trace_key", routerIP, "",
 				combinedReporter, false,
 				1234,
 			)
@@ -818,6 +827,7 @@ var _ = Describe("ProxyRoundTripper", func() {
 		})
 
 		It("can cancel requests", func() {
+			reqInfo.RouteEndpoint = endpoint
 			proxyRoundTripper.CancelRequest(req)
 			Expect(transport.CancelRequestCallCount()).To(Equal(1))
 			Expect(transport.CancelRequestArgsForCall(0)).To(Equal(req))

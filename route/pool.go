@@ -54,6 +54,7 @@ type Endpoint struct {
 	Stats                *Stats
 	IsolationSegment     string
 	useTls               bool
+	// MEMOIZED TRANSPORT HERE
 }
 
 //go:generate counterfeiter -o fakes/fake_endpoint_iterator.go . EndpointIterator

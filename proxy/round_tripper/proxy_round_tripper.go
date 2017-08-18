@@ -34,10 +34,20 @@ type ProxyRoundTripper interface {
 	CancelRequest(*http.Request)
 }
 
+type RoundTripperFactory interface {
+	New(expectedServerName string) ProxyRoundTripper
+}
+
+func GetRoundTripper(e *route.Endpoint, roundTripperFactory RoundTripperFactory) ProxyRoundTripper {
+	// TODO: memoize
+	return roundTripperFactory.New(e.PrivateInstanceId)
+}
+
 type AfterRoundTrip func(req *http.Request, rsp *http.Response, endpoint *route.Endpoint, err error)
 
 func NewProxyRoundTripper(
-	transport ProxyRoundTripper,
+	roundTripperFactory RoundTripperFactory,
+	// transport ProxyRoundTripper,
 	logger logger.Logger,
 	traceKey string,
 	routerIP string,
@@ -47,26 +57,28 @@ func NewProxyRoundTripper(
 	localPort uint16,
 ) ProxyRoundTripper {
 	return &roundTripper{
-		logger:             logger,
-		transport:          transport,
-		traceKey:           traceKey,
-		routerIP:           routerIP,
-		defaultLoadBalance: defaultLoadBalance,
-		combinedReporter:   combinedReporter,
-		secureCookies:      secureCookies,
-		localPort:          localPort,
+		logger: logger,
+		// transport:          transport,
+		traceKey:            traceKey,
+		routerIP:            routerIP,
+		defaultLoadBalance:  defaultLoadBalance,
+		combinedReporter:    combinedReporter,
+		secureCookies:       secureCookies,
+		localPort:           localPort,
+		roundTripperFactory: roundTripperFactory,
 	}
 }
 
 type roundTripper struct {
-	transport          ProxyRoundTripper
-	logger             logger.Logger
-	traceKey           string
-	routerIP           string
-	defaultLoadBalance string
-	combinedReporter   metrics.CombinedReporter
-	secureCookies      bool
-	localPort          uint16
+	// transport          ProxyRoundTripper
+	logger              logger.Logger
+	traceKey            string
+	routerIP            string
+	defaultLoadBalance  string
+	combinedReporter    metrics.CombinedReporter
+	secureCookies       bool
+	localPort           uint16
+	roundTripperFactory RoundTripperFactory
 }
 
 func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -107,6 +119,7 @@ func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error)
 				break
 			}
 			logger = logger.With(zap.Nest("route-endpoint", endpoint.ToLogData()...))
+			reqInfo.RouteEndpoint = endpoint
 
 			logger.Debug("backend", zap.Int("attempt", retry))
 			if endpoint.IsTLS() {
@@ -126,6 +139,7 @@ func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error)
 			)
 
 			endpoint = newRouteServiceEndpoint()
+			reqInfo.RouteEndpoint = endpoint
 			request.Host = reqInfo.RouteServiceURL.Host
 			request.URL = new(url.URL)
 			*request.URL = *reqInfo.RouteServiceURL
@@ -136,8 +150,8 @@ func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error)
 				request.URL.Scheme = "http"
 				request.URL.Host = fmt.Sprintf("localhost:%d", rt.localPort)
 			}
-
-			res, err = rt.transport.RoundTrip(request)
+			tr := GetRoundTripper(endpoint, rt.roundTripperFactory)
+			res, err = tr.RoundTrip(request)
 			if err == nil {
 				if res != nil && (res.StatusCode < 200 || res.StatusCode >= 300) {
 					logger.Info(
@@ -196,7 +210,13 @@ func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error)
 }
 
 func (rt *roundTripper) CancelRequest(request *http.Request) {
-	rt.transport.CancelRequest(request)
+	endpoint, err := handlers.GetEndpoint(request.Context())
+	if err != nil {
+		return // TODO: is this right???? The most likely error is no endpoint found
+	}
+	tr := GetRoundTripper(endpoint, rt.roundTripperFactory)
+
+	tr.CancelRequest(request)
 }
 
 func (rt *roundTripper) backendRoundTrip(
@@ -213,7 +233,8 @@ func (rt *roundTripper) backendRoundTrip(
 	iter.PreRequest(endpoint)
 
 	rt.combinedReporter.CaptureRoutingRequest(endpoint)
-	res, err := rt.transport.RoundTrip(request)
+	tr := GetRoundTripper(endpoint, rt.roundTripperFactory)
+	res, err := tr.RoundTrip(request)
 
 	// decrement connection stats
 	iter.PostRequest(endpoint)
