@@ -276,7 +276,7 @@ var _ = Describe("Router Integration", func() {
 							for {
 								select {
 								case <-runningTicker.C:
-									runningApp1.TlsRegister(privateInstanceId)
+									runningApp1.TlsRegister("wrong-instance-id")
 								}
 							}
 						}()
