@@ -709,7 +709,7 @@ var _ = Describe("Router Integration", func() {
 	})
 
 	Context("when nats server shuts down and comes back up", func() {
-		XIt("should not panic, log the disconnection, and reconnect", func() {
+		It("should not panic, log the disconnection, and reconnect", func() {
 			localIP, err := localip.LocalIP()
 			Expect(err).ToNot(HaveOccurred())
 
