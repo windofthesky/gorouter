@@ -71,6 +71,7 @@ var _ = Describe("ProxyRoundTripper", func() {
 			routerIP            string
 			combinedReporter    *fakes.FakeCombinedReporter
 			roundTripperFactory *FakeRoundTripperFactory
+			retryableClassifier *roundtripperfakes.FakeRetryableClassifier
 
 			reqInfo *handlers.RequestInfo
 
@@ -119,8 +120,10 @@ var _ = Describe("ProxyRoundTripper", func() {
 			combinedReporter = new(fakes.FakeCombinedReporter)
 
 			roundTripperFactory = &FakeRoundTripperFactory{ReturnValue: transport}
+			retryableClassifier = &roundtripperfakes.FakeRetryableClassifier{}
+			retryableClassifier.IsRetryableReturns(false)
 			proxyRoundTripper = round_tripper.NewProxyRoundTripper(
-				roundTripperFactory,
+				roundTripperFactory, retryableClassifier,
 				logger, "my_trace_key", routerIP, "",
 				combinedReporter, false,
 				1234,
@@ -210,6 +213,26 @@ var _ = Describe("ProxyRoundTripper", func() {
 			})
 		})
 
+		Context("when backend is unavailable due to a retryable error", func() {
+			BeforeEach(func() {
+				transport.RoundTripReturns(nil, errors.New("error"))
+			})
+
+			It("retries 3 times and returns status bad gateway", func() {
+				_, err := proxyRoundTripper.RoundTrip(req)
+				Expect(err).To(MatchError(dialError))
+				Expect(transport.RoundTripCallCount()).To(Equal(3))
+
+				Expect(resp.Code).To(Equal(http.StatusBadGateway))
+				Expect(resp.Header().Get(router_http.CfRouterError)).To(Equal("endpoint_failure"))
+				bodyBytes, err := ioutil.ReadAll(resp.Body)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(string(bodyBytes)).To(ContainSubstring(round_tripper.BadGatewayMessage))
+				Expect(reqInfo.RouteEndpoint).To(Equal(endpoint))
+				Expect(reqInfo.StoppedAt).To(BeTemporally("~", time.Now(), 50*time.Millisecond))
+			})
+		})
+
 		Context("when backend is unavailable due to non-retryable error", func() {
 			BeforeEach(func() {
 				transport.RoundTripReturns(nil, errors.New("error"))
@@ -263,20 +286,7 @@ var _ = Describe("ProxyRoundTripper", func() {
 		Context("when backend is unavailable due to dial error", func() {
 			BeforeEach(func() {
 				transport.RoundTripReturns(nil, dialError)
-			})
 
-			It("retries 3 times and returns status bad gateway", func() {
-				_, err := proxyRoundTripper.RoundTrip(req)
-				Expect(err).To(MatchError(dialError))
-				Expect(transport.RoundTripCallCount()).To(Equal(3))
-
-				Expect(resp.Code).To(Equal(http.StatusBadGateway))
-				Expect(resp.Header().Get(router_http.CfRouterError)).To(Equal("endpoint_failure"))
-				bodyBytes, err := ioutil.ReadAll(resp.Body)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(string(bodyBytes)).To(ContainSubstring(round_tripper.BadGatewayMessage))
-				Expect(reqInfo.RouteEndpoint).To(Equal(endpoint))
-				Expect(reqInfo.StoppedAt).To(BeTemporally("~", time.Now(), 50*time.Millisecond))
 			})
 
 			It("captures each routing request to the backend", func() {
@@ -485,7 +495,7 @@ var _ = Describe("ProxyRoundTripper", func() {
 				}
 			})
 
-			It("does not log anything about route services", func() {
+			FIt("does not log anything about route services", func() {
 				_, err := proxyRoundTripper.RoundTrip(req)
 				Expect(err).ToNot(HaveOccurred())
 
