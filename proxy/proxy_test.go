@@ -1489,6 +1489,40 @@ var _ = Describe("Proxy", func() {
 		shouldEcho("/test?a=b&b%3D+bc+&c%3Dd%26e", "/test?"+queryString)
 	})
 
+	It("treats double slashes in request URI as an absolute-form request target", func() {
+		ln := registerHandler(r, "test.io", func(conn *test_util.HttpConn) {
+			conn.CheckLine("GET http://test.io//something.io HTTP/1.1")
+			conn.WriteResponse(test_util.NewResponse(http.StatusOK))
+		})
+		defer ln.Close()
+
+		req, err := http.NewRequest("GET", "http://test.io//something.io", nil)
+		Expect(err).ToNot(HaveOccurred())
+
+		conn := dialProxy(proxyServer)
+		conn.WriteRequest(req)
+
+		resp, _ := conn.ReadResponse()
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+	})
+
+	It("handles double slashes in an absolute-form request target correctly", func() {
+		ln := registerHandler(r, "test.io", func(conn *test_util.HttpConn) {
+			conn.CheckLine("GET http://test.io//something.io HTTP/1.1")
+			conn.WriteResponse(test_util.NewResponse(http.StatusOK))
+		})
+		defer ln.Close()
+
+		conn := dialProxy(proxyServer)
+		conn.WriteLines([]string{
+			"GET http://test.io//something.io HTTP/1.1",
+			"Host: test.io",
+		})
+
+		resp, _ := conn.ReadResponse()
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+	})
+
 	It("request terminates with slow response", func() {
 		ln := registerHandler(r, "slow-app", func(conn *test_util.HttpConn) {
 			_, err := http.ReadRequest(conn.Reader)
