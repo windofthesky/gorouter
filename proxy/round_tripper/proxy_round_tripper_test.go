@@ -26,7 +26,6 @@ import (
 	"code.cloudfoundry.org/routing-api/models"
 
 	router_http "code.cloudfoundry.org/gorouter/common/http"
-	"code.cloudfoundry.org/gorouter/common/uuid"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -702,116 +701,6 @@ var _ = Describe("ProxyRoundTripper", func() {
 						Expect(err).To(MatchError(errors.New("error")))
 
 						Expect(logger.Buffer()).ToNot(gbytes.Say(`route-service-connection-failed`))
-					})
-				})
-			})
-
-		})
-
-		Context("when sticky session", func() {
-			var (
-				sessionCookie *http.Cookie
-				endpoint1     *route.Endpoint
-				endpoint2     *route.Endpoint
-			)
-			BeforeEach(func() {
-				sessionCookie = &http.Cookie{
-					Name: round_tripper.StickyCookieKey,
-				}
-
-				transport.RoundTripStub = func(req *http.Request) (*http.Response, error) {
-					resp := &http.Response{StatusCode: http.StatusTeapot, Header: make(map[string][]string)}
-
-					if len(req.Cookies()) > 0 {
-						//Only attach the JSESSIONID on to the response
-						resp.Header.Add(round_tripper.CookieHeader, req.Cookies()[0].String())
-						return resp, nil
-					}
-
-					sessionCookie.Value, _ = uuid.GenerateUUID()
-					resp.Header.Add(round_tripper.CookieHeader, sessionCookie.String())
-					return resp, nil
-				}
-
-				endpoint1 = route.NewEndpoint("appId", "1.1.1.1", uint16(9091), "id-1", "2",
-					map[string]string{}, 0, "route-service.com", models.ModificationTag{}, "", false)
-				endpoint2 = route.NewEndpoint("appId", "1.1.1.1", uint16(9092), "id-2", "3",
-					map[string]string{}, 0, "route-service.com", models.ModificationTag{}, "", false)
-
-				added := routePool.Put(endpoint1)
-				Expect(added).To(BeTrue())
-				added = routePool.Put(endpoint2)
-				Expect(added).To(BeTrue())
-				removed := routePool.Remove(endpoint)
-				Expect(removed).To(BeTrue())
-			})
-
-			Context("and no previous session", func() {
-				It("will select an endpoint and add a cookie header with the privateInstanceId", func() {
-					resp, err := proxyRoundTripper.RoundTrip(req)
-					Expect(err).ToNot(HaveOccurred())
-
-					cookies := resp.Cookies()
-					Expect(cookies).To(HaveLen(2))
-					Expect(cookies[0].Raw).To(Equal(sessionCookie.String()))
-					Expect(cookies[1].Name).To(Equal(round_tripper.VcapCookieId))
-					Expect(cookies[1].Value).To(SatisfyAny(
-						Equal("id-1"),
-						Equal("id-2")))
-				})
-			})
-
-			Context("and previous session", func() {
-				var cookies []*http.Cookie
-				BeforeEach(func() {
-					resp, err := proxyRoundTripper.RoundTrip(req)
-					Expect(err).ToNot(HaveOccurred())
-
-					cookies = resp.Cookies()
-					Expect(cookies).To(HaveLen(2))
-					for _, cookie := range cookies {
-						req.AddCookie(cookie)
-					}
-				})
-
-				It("will select the previous backend", func() {
-					resp, err := proxyRoundTripper.RoundTrip(req)
-					Expect(err).ToNot(HaveOccurred())
-
-					new_cookies := resp.Cookies()
-					Expect(new_cookies).To(HaveLen(2))
-
-					//JSESSIONID should be the same
-					Expect(new_cookies[0]).To(Equal(cookies[0]))
-
-					Expect(new_cookies[1].Value).To(Equal(cookies[1].Value))
-				})
-
-				Context("when the previous endpoints cannot be reached", func() {
-					BeforeEach(func() {
-						removed := routePool.Remove(endpoint1)
-						Expect(removed).To(BeTrue())
-
-						removed = routePool.Remove(endpoint2)
-						Expect(removed).To(BeTrue())
-
-						new_endpoint := route.NewEndpoint("appId", "1.1.1.1", uint16(9091), "id-5", "2",
-							map[string]string{}, 0, "route-service.com", models.ModificationTag{}, "", false)
-						added := routePool.Put(new_endpoint)
-						Expect(added).To(BeTrue())
-					})
-
-					It("will select a new backend and update the vcap cookie id", func() {
-						resp, err := proxyRoundTripper.RoundTrip(req)
-						Expect(err).ToNot(HaveOccurred())
-
-						new_cookies := resp.Cookies()
-						Expect(new_cookies).To(HaveLen(2))
-
-						//JSESSIONID should be the same
-						Expect(new_cookies[0]).To(Equal(cookies[0]))
-
-						Expect(new_cookies[1].Value).To(Equal("id-5"))
 					})
 				})
 			})
