@@ -76,6 +76,7 @@ type SubscriberOpts struct {
 	ID                               string
 	MinimumRegisterIntervalInSeconds int
 	PruneThresholdInSeconds          int
+	AcceptTLS                        bool
 }
 
 // NewSubscriber returns a new Subscriber
@@ -163,7 +164,15 @@ func (s *Subscriber) subscribeRoutes() error {
 }
 
 func (s *Subscriber) registerEndpoint(msg *RegistryMessage) {
+	if !s.opts.AcceptTLS && msg.Port == 0 {
+		s.logger.Error("route not registered, TLS for backends is not enabled")
+		return
+	} else if !s.opts.AcceptTLS {
+		msg.TLSPort = 0
+	}
+
 	endpoint := msg.makeEndpoint()
+
 	for _, uri := range msg.Uris {
 		s.routeRegistry.Register(uri, endpoint)
 	}

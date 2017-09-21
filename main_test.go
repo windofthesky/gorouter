@@ -1208,6 +1208,7 @@ func routeExists(routesEndpoint, routeName string) (bool, error) {
 		routes := make(map[string]interface{})
 		err = json.Unmarshal(bytes, &routes)
 		Expect(err).ToNot(HaveOccurred())
+		Ω(err).ToNot(HaveOccurred())
 
 		_, found := routes[routeName]
 		return found, nil
