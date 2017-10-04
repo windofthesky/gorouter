@@ -306,6 +306,7 @@ func newUaaClient(logger goRouterLogger.Logger, clock clock.Clock, c *config.Con
 }
 
 func natsOptions(logger goRouterLogger.Logger, c *config.Config, natsHost *atomic.Value, startMsg chan<- struct{}) nats.Options {
+	logger.Info(fmt.Sprintf("in natsOptions. NatsClientPingInterval: %+v", c.NatsClientPingInterval))
 	natsServers := c.NatsServers()
 
 	options := nats.DefaultOptions
