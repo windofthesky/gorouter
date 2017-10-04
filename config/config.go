@@ -353,6 +353,52 @@ func (c *Config) Process() {
 	}
 }
 
+func ConvertCipherSuiteToString(tlsState *tls.ConnectionState) string {
+	if tlsState == nil {
+		return ""
+	}
+	cipherMap := map[uint16]string{
+		0x0005: "TLS_RSA_WITH_RC4_128_SHA", // RFC formatted values
+		0x000a: "TLS_RSA_WITH_3DES_EDE_CBC_SHA",
+		0x002f: "TLS_RSA_WITH_AES_128_CBC_SHA",
+		0x0035: "TLS_RSA_WITH_AES_256_CBC_SHA",
+		0x003c: "TLS_RSA_WITH_AES_128_CBC_SHA256",
+		0x009c: "TLS_RSA_WITH_AES_128_GCM_SHA256",
+		0x009d: "TLS_RSA_WITH_AES_256_GCM_SHA384",
+		0xc007: "TLS_ECDHE_ECDSA_WITH_RC4_128_SHA",
+		0xc009: "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA",
+		0xc00a: "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA",
+		0xc011: "TLS_ECDHE_RSA_WITH_RC4_128_SHA",
+		0xc012: "TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA",
+		0xc013: "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+		0xc014: "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+		0xc023: "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256",
+		0xc027: "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256",
+		0xc02f: "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+		0xc02b: "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+		0xc030: "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+		0xc02c: "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+		0xcca8: "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305",
+		0xcca9: "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305",
+	}
+
+	return cipherMap[tlsState.CipherSuite]
+}
+
+func ConvertVersionToString(tlsState *tls.ConnectionState) string {
+	if tlsState == nil {
+		return ""
+	}
+	versionMap := map[uint16]string{
+		0x0300: "SSLv3.0",
+		0x0301: "TLSv1.0",
+		0x0302: "TLSv1.1",
+		0x0303: "TLSv1.2",
+	}
+
+	return versionMap[tlsState.Version]
+}
+
 func (c *Config) processCipherSuites() []uint16 {
 	cipherMap := map[string]uint16{
 		"RC4-SHA":                                 0x0005, // openssl formatted values

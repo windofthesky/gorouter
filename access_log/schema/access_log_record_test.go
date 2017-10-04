@@ -11,6 +11,7 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
+	"crypto/tls"
 	"net/http"
 	"net/url"
 	"time"
@@ -30,6 +31,10 @@ var _ = Describe("AccessLogRecord", func() {
 				Proto:  "FakeRequestProto",
 				URL: &url.URL{
 					Opaque: "http://example.com/request",
+				},
+				TLS: &tls.ConnectionState{
+					Version:     tls.VersionTLS12,
+					CipherSuite: tls.TLS_RSA_WITH_RC4_128_SHA,
 				},
 				Header: http.Header{
 					"Referer":                    []string{"FakeReferer"},
@@ -54,6 +59,8 @@ var _ = Describe("AccessLogRecord", func() {
 			recordString := "FakeRequestHost - " +
 				"[2000-01-01T00:00:00.000+0000] " +
 				`"FakeRequestMethod http://example.com/request FakeRequestProto" ` +
+				`"TLSv1.2" ` +
+				`"TLS_RSA_WITH_RC4_128_SHA" ` +
 				"200 " +
 				"30 " +
 				"23 " +
@@ -75,6 +82,7 @@ var _ = Describe("AccessLogRecord", func() {
 		Context("with values missing", func() {
 			BeforeEach(func() {
 				record.Request.Header = http.Header{}
+				record.Request.TLS = &tls.ConnectionState{}
 				record.RouteEndpoint = &route.Endpoint{
 					ApplicationId:        "FakeApplicationId",
 					PrivateInstanceIndex: "",
@@ -88,6 +96,46 @@ var _ = Describe("AccessLogRecord", func() {
 				recordString := "FakeRequestHost - " +
 					"[2000-01-01T00:00:00.000+0000] " +
 					`"FakeRequestMethod http://example.com/request FakeRequestProto" ` +
+					`"-" ` +
+					`"-" ` +
+					`"-" ` +
+					"0 " +
+					"0 " +
+					`"-" ` +
+					`"-" ` +
+					`"FakeRemoteAddr" ` +
+					`"-" ` +
+					`x_forwarded_for:"-" ` +
+					`x_forwarded_proto:"-" ` +
+					`vcap_request_id:"-" ` +
+					`response_time:"-" ` +
+					`app_id:"FakeApplicationId" ` +
+					`app_index:"-"` +
+					"\n"
+
+				Expect(record.LogMessage()).To(Equal(recordString))
+			})
+		})
+
+		Context("when non-TLS", func() {
+			BeforeEach(func() {
+				record.Request.Header = http.Header{}
+				record.Request.TLS = nil
+				record.RouteEndpoint = &route.Endpoint{
+					ApplicationId:        "FakeApplicationId",
+					PrivateInstanceIndex: "",
+				}
+				record.BodyBytesSent = 0
+				record.StatusCode = 0
+				record.FinishedAt = time.Time{}
+				record.RequestBytesReceived = 0
+			})
+			It("makes a record", func() {
+				recordString := "FakeRequestHost - " +
+					"[2000-01-01T00:00:00.000+0000] " +
+					`"FakeRequestMethod http://example.com/request FakeRequestProto" ` +
+					`"-" ` +
+					`"-" ` +
 					`"-" ` +
 					"0 " +
 					"0 " +
@@ -127,6 +175,8 @@ var _ = Describe("AccessLogRecord", func() {
 				recordString := "FakeRequestHost - " +
 					"[2000-01-01T00:00:00.000+0000] " +
 					`"FakeRequestMethod http://example.com/request FakeRequestProto" ` +
+					`"TLSv1.2" ` +
+					`"TLS_RSA_WITH_RC4_128_SHA" ` +
 					`200 ` +
 					"30 " +
 					"23 " +
@@ -160,6 +210,10 @@ var _ = Describe("AccessLogRecord", func() {
 						URL: &url.URL{
 							Opaque: "http://example.com/request",
 						},
+						TLS: &tls.ConnectionState{
+							Version:     tls.VersionTLS12,
+							CipherSuite: tls.TLS_RSA_WITH_RC4_128_SHA,
+						},
 						Header: http.Header{
 							"Referer":                    []string{"FakeReferer"},
 							"User-Agent":                 []string{"FakeUserAgent"},
@@ -181,6 +235,8 @@ var _ = Describe("AccessLogRecord", func() {
 				recordString := "FakeRequestHost - " +
 					"[2000-01-01T00:00:00.000+0000] " +
 					`"FakeRequestMethod http://example.com/request FakeRequestProto" ` +
+					`"TLSv1.2" ` +
+					`"TLS_RSA_WITH_RC4_128_SHA" ` +
 					"200 " +
 					"30 " +
 					"23 " +
@@ -206,6 +262,8 @@ var _ = Describe("AccessLogRecord", func() {
 			recordString := "FakeRequestHost - " +
 				"[2000-01-01T00:00:00.000+0000] " +
 				`"FakeRequestMethod http://example.com/request FakeRequestProto" ` +
+				`"TLSv1.2" ` +
+				`"TLS_RSA_WITH_RC4_128_SHA" ` +
 				"200 " +
 				"30 " +
 				"23 " +

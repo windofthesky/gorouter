@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"code.cloudfoundry.org/gorouter/config"
 	"code.cloudfoundry.org/gorouter/route"
 )
 
@@ -124,6 +125,8 @@ func (r *AccessLogRecord) makeRecord() []byte {
 
 	b.AppendSpaces(true)
 	b.WriteStringValues(r.Request.Method, r.Request.URL.RequestURI(), r.Request.Proto)
+	b.WriteDashOrStringValue(config.ConvertVersionToString(r.Request.TLS))
+	b.WriteDashOrStringValue(config.ConvertCipherSuiteToString(r.Request.TLS))
 	b.WriteDashOrIntValue(r.StatusCode)
 	b.WriteIntValue(r.RequestBytesReceived)
 	b.WriteIntValue(r.BodyBytesSent)
