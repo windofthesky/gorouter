@@ -13,6 +13,8 @@ import (
 	"code.cloudfoundry.org/localip"
 	"code.cloudfoundry.org/routing-api/models"
 
+	"sync"
+
 	"github.com/nats-io/nats"
 	"github.com/uber-go/zap"
 )
@@ -67,6 +69,30 @@ func (rm *RegistryMessage) port(acceptTLS bool) (uint16, bool, error) {
 	return rm.Port, false, nil
 }
 
+type msgPool struct {
+	sync.RWMutex
+	slice []*RegistryMessage
+	count int
+}
+
+func (mp *msgPool) Get() *RegistryMessage {
+	mp.Lock()
+	if mp.count > 0 {
+
+		mp.count--
+		return mp.slice[mp.count]
+	}
+	mp.Unlock()
+	return &RegistryMessage{}
+}
+
+func (mp *msgPool) Put(msg *RegistryMessage) {
+	mp.Lock()
+	mp.slice = append(mp.slice, msg)
+	mp.count++
+	mp.Unlock()
+}
+
 // Subscriber subscribes to NATS for all router.* messages and handles them
 type Subscriber struct {
 	logger        logger.Logger
@@ -74,6 +100,7 @@ type Subscriber struct {
 	startMsgChan  <-chan struct{}
 	opts          *SubscriberOpts
 	routeRegistry registry.Registry
+	msgBufferPool msgPool
 }
 
 // SubscriberOpts contains configuration for Subscriber struct
@@ -98,6 +125,10 @@ func NewSubscriber(
 		routeRegistry: routeRegistry,
 		startMsgChan:  startMsgChan,
 		opts:          opts,
+		msgBufferPool: msgPool{
+			count: 0,
+			slice: make([]*RegistryMessage, 0, 10000),
+		},
 	}
 }
 
@@ -144,7 +175,9 @@ func (s *Subscriber) subscribeToGreetMessage() error {
 
 func (s *Subscriber) subscribeRoutes() error {
 	natsSubscriber, err := s.natsClient.Subscribe("router.*", func(message *nats.Msg) {
-		msg, regErr := createRegistryMessage(message.Data)
+		msg := s.msgBufferPool.Get()
+		defer s.msgBufferPool.Put(msg)
+		regErr := createRegistryMessage(message.Data, msg)
 		if regErr != nil {
 			s.logger.Error("validation-error",
 				zap.Error(regErr),
@@ -226,17 +259,16 @@ func (s *Subscriber) sendStartMessage() error {
 	return s.natsClient.Publish("router.start", message)
 }
 
-func createRegistryMessage(data []byte) (*RegistryMessage, error) {
-	var msg RegistryMessage
+func createRegistryMessage(data []byte, msg *RegistryMessage) error {
 
-	jsonErr := json.Unmarshal(data, &msg)
+	jsonErr := json.Unmarshal(data, msg)
 	if jsonErr != nil {
-		return nil, jsonErr
+		return jsonErr
 	}
 
 	if !msg.ValidateMessage() {
-		return nil, errors.New("Unable to validate message. route_service_url must be https")
+		return errors.New("Unable to validate message. route_service_url must be https")
 	}
 
-	return &msg, nil
+	return nil
 }
