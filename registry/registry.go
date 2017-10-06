@@ -8,6 +8,8 @@ import (
 
 	"github.com/uber-go/zap"
 
+	"fmt"
+
 	"code.cloudfoundry.org/gorouter/config"
 	"code.cloudfoundry.org/gorouter/logger"
 	"code.cloudfoundry.org/gorouter/metrics"
@@ -77,6 +79,8 @@ func NewRouteRegistry(logger logger.Logger, c *config.Config, reporter metrics.R
 }
 
 func (r *RouteRegistry) Register(uri route.Uri, endpoint *route.Endpoint) {
+	fmt.Println("register")
+
 	if !r.endpointInRouterShard(endpoint) {
 		return
 	}
@@ -88,6 +92,7 @@ func (r *RouteRegistry) Register(uri route.Uri, endpoint *route.Endpoint) {
 	routekey := uri.RouteKey()
 
 	pool := r.byURI.Find(routekey)
+	fmt.Printf("got pool %#v", pool)
 	if pool == nil {
 		host, contextPath := splitHostAndContextPath(uri)
 		pool = route.NewPool(r.dropletStaleThreshold/4, host, contextPath)
@@ -144,9 +149,11 @@ func (r *RouteRegistry) Lookup(uri route.Uri) *route.Pool {
 	uri = uri.RouteKey()
 	var err error
 	pool := r.byURI.MatchUri(uri)
+	fmt.Printf("in Lookup, pool = %#v\n", pool)
 	for pool == nil && err == nil {
 		uri, err = uri.NextWildcard()
 		pool = r.byURI.MatchUri(uri)
+		fmt.Printf("in lookup loop, uri %s, pool %#v\n", uri, pool)
 	}
 
 	r.RUnlock()

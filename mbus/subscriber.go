@@ -17,6 +17,7 @@ import (
 
 	"github.com/nats-io/nats"
 	"github.com/uber-go/zap"
+	"fmt"
 )
 
 // RegistryMessage defines the format of a route registration/unregistration
@@ -203,6 +204,7 @@ func (s *Subscriber) subscribeRoutes() error {
 
 func (s *Subscriber) registerEndpoint(msg *RegistryMessage) {
 	endpoint, err := msg.makeEndpoint(s.opts.AcceptTLS)
+	fmt.Printf("registerEndpoint\n %#v\n %#v\n", msg, endpoint)
 	if err != nil {
 		s.logger.Error("Unable to register route",
 			zap.Error(err),

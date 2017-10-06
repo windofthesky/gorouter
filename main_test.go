@@ -601,9 +601,9 @@ var _ = Describe("Router Integration", func() {
 		Eventually(gorouterSession.Out.Contents).Should(ContainSubstring("Component Router registered successfully"))
 	})
 
-	It("has Nats connectivity", func() {
-		SetDefaultEventuallyTimeout(5 * time.Second)
-		defer SetDefaultEventuallyTimeout(1 * time.Second)
+	FIt("has Nats connectivity", func() {
+		//SetDefaultEventuallyTimeout(5 * time.Second)
+		//defer SetDefaultEventuallyTimeout(1 * time.Second)
 
 		localIP, err := localip.LocalIP()
 		Expect(err).ToNot(HaveOccurred())

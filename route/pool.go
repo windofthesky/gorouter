@@ -156,6 +156,8 @@ func (p *Pool) Put(endpoint *Endpoint) bool {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
+	fmt.Printf("adding to pool %#v\n", p)
+
 	e, found := p.index[endpoint.CanonicalAddr()]
 	if found {
 		if e.endpoint != endpoint {
@@ -180,6 +182,7 @@ func (p *Pool) Put(endpoint *Endpoint) bool {
 		}
 
 		p.endpoints = append(p.endpoints, e)
+		fmt.Printf("POOL adding endpoint\n %#v\n %$v\n ", p.endpoints, e)
 
 		p.index[endpoint.CanonicalAddr()] = e
 		p.index[endpoint.PrivateInstanceId] = e
