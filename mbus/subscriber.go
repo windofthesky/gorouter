@@ -6,16 +6,19 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"code.cloudfoundry.org/gorouter/common"
 	"code.cloudfoundry.org/gorouter/common/uuid"
 	"code.cloudfoundry.org/gorouter/config"
 	"code.cloudfoundry.org/gorouter/logger"
+	"code.cloudfoundry.org/gorouter/metrics/monitor"
 	"code.cloudfoundry.org/gorouter/registry"
 	"code.cloudfoundry.org/gorouter/route"
 	"code.cloudfoundry.org/localip"
 	"code.cloudfoundry.org/routing-api/models"
 
+	"github.com/cloudfoundry/dropsonde/metrics"
 	"github.com/mailru/easyjson"
 	"github.com/nats-io/nats"
 	"github.com/uber-go/zap"
@@ -78,6 +81,7 @@ func (rm *RegistryMessage) port(acceptTLS bool) (uint16, bool, error) {
 type Subscriber struct {
 	mbusClient    Client
 	routeRegistry registry.Registry
+	sender        metrics.MetricSender
 	reconnected   <-chan Signal
 
 	params    startMessageParams
@@ -96,6 +100,7 @@ type startMessageParams struct {
 func NewSubscriber(
 	mbusClient Client,
 	routeRegistry registry.Registry,
+	sender metrics.MetricSender,
 	c *config.Config,
 	reconnected <-chan Signal,
 	l logger.Logger,
@@ -108,6 +113,7 @@ func NewSubscriber(
 	return &Subscriber{
 		mbusClient:    mbusClient,
 		routeRegistry: routeRegistry,
+		sender:        sender,
 
 		params: startMessageParams{
 			id: fmt.Sprintf("%d-%s", c.Index, guid),
@@ -136,10 +142,19 @@ func (s *Subscriber) Run(signals <-chan os.Signal, ready chan<- struct{}) error 
 	if err != nil {
 		return err
 	}
-	err = s.subscribeRoutes()
+	subscription, err := s.subscribeRoutes()
 	if err != nil {
 		return err
 	}
+	ticker := time.NewTicker(time.Second * 5)
+	natsMonitor := monitor.NATSMonitor{
+		Subscription: subscription,
+		Sender:       s.sender,
+		TickChan:     ticker.C,
+		Logger:       s.logger,
+	}
+
+	go natsMonitor.Run()
 
 	close(ready)
 	s.logger.Info("subscriber-started")
@@ -166,7 +181,7 @@ func (s *Subscriber) subscribeToGreetMessage() error {
 	return err
 }
 
-func (s *Subscriber) subscribeRoutes() error {
+func (s *Subscriber) subscribeRoutes() (*nats.Subscription, error) {
 	natsSubscriber, err := s.mbusClient.Subscribe("router.*", func(message *nats.Msg) {
 		msg, regErr := createRegistryMessage(message.Data)
 		if regErr != nil {
@@ -189,7 +204,7 @@ func (s *Subscriber) subscribeRoutes() error {
 
 	// Pending limits are set to twice the defaults
 	natsSubscriber.SetPendingLimits(131072, 131072*1024)
-	return err
+	return natsSubscriber, err
 }
 
 func (s *Subscriber) registerEndpoint(msg *RegistryMessage) {

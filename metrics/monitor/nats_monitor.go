@@ -1,29 +1,37 @@
 package monitor
 
 import (
-	"os"
 	"time"
 
+	"code.cloudfoundry.org/gorouter/logger"
 	"github.com/cloudfoundry/dropsonde/metrics"
+	"github.com/uber-go/zap"
 )
 
-type NATSMonitor struct {
-	Sender   metrics.MetricSender
-	TickChan chan time.Time
+//go:generate counterfeiter -o ../fakes/fake_nats_subscription.go . NATSsubscription
+type NATSsubscription interface {
+	Pending() (int, int, error)
 }
 
-func (n *NATSMonitor) Run(signals <-chan os.Signal, ready chan<- struct{}) error {
-	close(ready)
+type NATSMonitor struct {
+	Subscription NATSsubscription
+	Sender       metrics.MetricSender
+	TickChan     <-chan time.Time
+	Logger       logger.Logger
+}
+
+func (n *NATSMonitor) Run() {
 	for {
 		select {
 		case <-n.TickChan:
-			//get the valude from nats subscriber.Pending()
-			// send the valude using dropsonde value chainer Send()
-			pending := 1
-			chainer := n.Sender.Value("buffered_messages", float64(pending), "")
-			err := chainer.Send()
+			queuedMsgs, _, err := n.Subscription.Pending()
 			if err != nil {
-				panic("panic")
+				n.Logger.Error("error-retrieving-nats-subscription-pending-messages", zap.Error(err))
+			}
+			chainer := n.Sender.Value("buffered_messages", float64(queuedMsgs), "")
+			err = chainer.Send()
+			if err != nil {
+				n.Logger.Error("error-sending-nats-monitor-metric", zap.Error(err))
 			}
 		}
 	}
