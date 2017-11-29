@@ -17,7 +17,7 @@ import (
 
 var _ = Describe("NATSMonitor", func() {
 	var (
-		subscription *fakes.FakeNATSsubscription
+		subscriber   *fakes.FakeSubscriber
 		valueChainer *fakes.FakeValueChainer
 		sender       *fakes.MetricSender
 		ch           chan time.Time
@@ -28,21 +28,18 @@ var _ = Describe("NATSMonitor", func() {
 
 	BeforeEach(func() {
 		ch = make(chan time.Time)
-
-		subscription = new(fakes.FakeNATSsubscription)
-
+		subscriber = new(fakes.FakeSubscriber)
 		sender = new(fakes.MetricSender)
-
 		valueChainer = new(fakes.FakeValueChainer)
 		sender.ValueReturns(valueChainer)
 
 		logger = test_util.NewTestZapLogger("test")
 
 		natsMonitor = &monitor.NATSMonitor{
-			Subscription: subscription,
-			Sender:       sender,
-			TickChan:     ch,
-			Logger:       logger,
+			Subscriber: subscriber,
+			Sender:     sender,
+			TickChan:   ch,
+			Logger:     logger,
 		}
 
 		process = ifrit.Invoke(natsMonitor)
@@ -57,6 +54,7 @@ var _ = Describe("NATSMonitor", func() {
 	})
 
 	It("sends a metric on a time interval", func() {
+		subscriber.PendingReturns(0, nil)
 		ch <- time.Time{}
 		ch <- time.Time{} // an extra tick is to make sure the time ticked at least once
 
@@ -84,12 +82,12 @@ var _ = Describe("NATSMonitor", func() {
 		ch <- time.Time{}
 		ch <- time.Time{}
 
-		Expect(subscription.PendingCallCount()).To(BeNumerically(">=", 1))
+		Expect(subscriber.PendingCallCount()).To(BeNumerically(">=", 1))
 	})
 
 	Context("when Pending returns a value", func() {
 		BeforeEach(func() {
-			subscription.PendingReturns(1000, 0, nil)
+			subscriber.PendingReturns(1000, nil)
 		})
 		It("passes that value to the metric Sender", func() {
 			ch <- time.Time{}
@@ -98,14 +96,14 @@ var _ = Describe("NATSMonitor", func() {
 			Expect(sender.ValueCallCount()).To(BeNumerically(">=", 1))
 			_, val, _ := sender.ValueArgsForCall(0)
 
-			Expect(subscription.PendingCallCount()).To(BeNumerically(">=", 1))
+			Expect(subscriber.PendingCallCount()).To(BeNumerically(">=", 1))
 			Expect(val).To(Equal(float64(1000)))
 		})
 	})
 
 	Context("when it fails to retrieve queued messages", func() {
 		BeforeEach(func() {
-			subscription.PendingReturns(1000, 0, errors.New("failed"))
+			subscriber.PendingReturns(-1, errors.New("failed"))
 		})
 
 		It("should log an error when it fails to retrieve queued messages", func() {

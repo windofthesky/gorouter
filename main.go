@@ -178,13 +178,12 @@ func initializeFDMonitor(sender *metric_sender.MetricSender, logger goRouterLogg
 }
 
 func initializeNATSMonitor(subscriber *mbus.Subscriber, sender *metric_sender.MetricSender, logger goRouterLogger.Logger) *monitor.NATSMonitor {
-	logger.Info("initializing nats monitor", zap.Object("subscriber", subscriber), zap.Object("subscription", subscriber.Subscription()))
 	ticker := time.NewTicker(time.Second * 5)
 	return &monitor.NATSMonitor{
-		Subscription: subscriber.Subscription(),
-		Sender:       sender,
-		TickChan:     ticker.C,
-		Logger:       logger.Session("NATSMonitor"),
+		Subscriber: subscriber,
+		Sender:     sender,
+		TickChan:   ticker.C,
+		Logger:     logger.Session("NATSMonitor"),
 	}
 }
 

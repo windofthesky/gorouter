@@ -9,16 +9,16 @@ import (
 	"github.com/uber-go/zap"
 )
 
-//go:generate counterfeiter -o ../fakes/fake_nats_subscription.go . NATSsubscription
-type NATSsubscription interface {
-	Pending() (int, int, error)
+//go:generate counterfeiter -o ../fakes/fake_subscriber.go . Subscriber
+type Subscriber interface {
+	Pending() (int, error)
 }
 
 type NATSMonitor struct {
-	Subscription NATSsubscription
-	Sender       metrics.MetricSender
-	TickChan     <-chan time.Time
-	Logger       logger.Logger
+	Subscriber Subscriber
+	Sender     metrics.MetricSender
+	TickChan   <-chan time.Time
+	Logger     logger.Logger
 }
 
 func (n *NATSMonitor) Run(signals <-chan os.Signal, ready chan<- struct{}) error {
@@ -26,7 +26,7 @@ func (n *NATSMonitor) Run(signals <-chan os.Signal, ready chan<- struct{}) error
 	for {
 		select {
 		case <-n.TickChan:
-			queuedMsgs, _, err := n.Subscription.Pending()
+			queuedMsgs, err := n.Subscriber.Pending()
 			if err != nil {
 				n.Logger.Error("error-retrieving-nats-subscription-pending-messages", zap.Error(err))
 			}

@@ -117,14 +117,21 @@ var _ = Describe("Subscriber", func() {
 		Expect(err).To(MatchError("subscriber: nil mbus client"))
 	})
 
-	Context("Subscription", func() {
-		BeforeEach(func() {
+	Context("Pending", func() {
+		It("returns the subscription Pending value", func() {
 			process = ifrit.Invoke(sub)
 			Eventually(process.Ready()).Should(BeClosed())
+			msgs, err := sub.Pending()
+			Expect(msgs).To(BeNumerically(">=", 0))
+			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("returns the NATS subscription", func() {
-			Expect(sub.Subscription()).ToNot(BeNil())
+		Context("when subscription is nil", func() {
+			It("returns an error", func() {
+				msgs, err := sub.Pending()
+				Expect(msgs).To(Equal(-1))
+				Expect(err).To(HaveOccurred())
+			})
 		})
 	})
 

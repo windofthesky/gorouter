@@ -109,7 +109,6 @@ func NewSubscriber(
 	return &Subscriber{
 		mbusClient:    mbusClient,
 		routeRegistry: routeRegistry,
-		subscription:  &nats.Subscription{},
 
 		params: startMessageParams{
 			id: fmt.Sprintf("%d-%s", c.Index, guid),
@@ -145,7 +144,6 @@ func (s *Subscriber) Run(signals <-chan os.Signal, ready chan<- struct{}) error 
 
 	close(ready)
 	s.logger.Info("subscriber-started")
-	s.logger.Info("subscriber-started", zap.Object("subscription", s.subscription))
 
 	for {
 		select {
@@ -161,14 +159,14 @@ func (s *Subscriber) Run(signals <-chan os.Signal, ready chan<- struct{}) error 
 	}
 }
 
-func (s *Subscriber) Subscription() *nats.Subscription {
+func (s *Subscriber) Pending() (int, error) {
 	if s.subscription == nil {
 		s.logger.Error("failed-to-get-subscription")
-		return nil
+		return -1, errors.New("NATS subscription is nil, Subscriber must be invoked")
 	}
 
-	s.logger.Error("subscription found", zap.Object("subscription", s.subscription))
-	return s.subscription
+	msgs, _, err := s.subscription.Pending()
+	return msgs, err
 }
 
 func (s *Subscriber) subscribeToGreetMessage() error {
