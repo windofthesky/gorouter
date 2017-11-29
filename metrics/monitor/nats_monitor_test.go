@@ -2,116 +2,117 @@ package monitor_test
 
 import (
 	"errors"
-	"sync"
+	"os"
 	"time"
 
 	"code.cloudfoundry.org/gorouter/logger"
 	"code.cloudfoundry.org/gorouter/metrics/fakes"
 	"code.cloudfoundry.org/gorouter/metrics/monitor"
 	"code.cloudfoundry.org/gorouter/test_util"
-	"github.com/cloudfoundry/dropsonde/metric_sender"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/gbytes"
+	"github.com/tedsuo/ifrit"
 )
 
-var _ = FDescribe("NATSMonitor", func() {
+var _ = Describe("NATSMonitor", func() {
 	var (
-		fakeSubscription *fakes.FakeNATSsubscription
-		chainerMux       sync.Mutex
-		fakeValueChainer *fakes.FakeValueChainer
-		sender           *fakes.MetricSender
-		ch               chan time.Time
-		natsMonitor      *monitor.NATSMonitor
-		lgr              logger.Logger
+		subscription *fakes.FakeNATSsubscription
+		valueChainer *fakes.FakeValueChainer
+		sender       *fakes.MetricSender
+		ch           chan time.Time
+		natsMonitor  *monitor.NATSMonitor
+		logger       logger.Logger
+		process      ifrit.Process
 	)
+
 	BeforeEach(func() {
 		ch = make(chan time.Time)
 
-		fakeSubscription = new(fakes.FakeNATSsubscription)
+		subscription = new(fakes.FakeNATSsubscription)
 
 		sender = new(fakes.MetricSender)
 
-		fakeValueChainer = new(fakes.FakeValueChainer)
-		sender.ValueStub = func(metric string, value float64, unit string) metric_sender.ValueChainer {
-			return fakeValueChainer
-		}
+		valueChainer = new(fakes.FakeValueChainer)
+		sender.ValueReturns(valueChainer)
 
-		lgr = test_util.NewTestZapLogger("test")
+		logger = test_util.NewTestZapLogger("test")
 
 		natsMonitor = &monitor.NATSMonitor{
-			Subscription: fakeSubscription,
+			Subscription: subscription,
 			Sender:       sender,
 			TickChan:     ch,
-			Logger:       lgr,
+			Logger:       logger,
 		}
+
+		process = ifrit.Invoke(natsMonitor)
+		Eventually(process.Ready()).Should(BeClosed())
+	})
+
+	It("exits when os signal is received", func() {
+		process.Signal(os.Interrupt)
+		var err error
+		Eventually(process.Wait()).Should(Receive(&err))
+		Expect(err).ToNot(HaveOccurred())
 	})
 
 	It("sends a metric on a time interval", func() {
-
-		go natsMonitor.Run()
-
 		ch <- time.Time{}
-		ch <- time.Time{}
-		ch <- time.Time{}
+		ch <- time.Time{} // an extra tick is to make sure the time ticked at least once
 
-		Expect(sender.ValueCallCount()).To(BeNumerically(">=", 2))
+		Expect(sender.ValueCallCount()).To(BeNumerically(">=", 1))
 		name, _, unit := sender.ValueArgsForCall(0)
 		Expect(name).To(Equal("buffered_messages"))
 		Expect(unit).To(Equal(""))
 
-		Expect(fakeValueChainer.SendCallCount()).To(BeNumerically(">=", 2))
+		Expect(valueChainer.SendCallCount()).To(BeNumerically(">=", 1))
 	})
 
-	It("should log an error when Send fails", func() {
-		fakeValueChainer.SendStub = func() error {
-			return errors.New("send failed")
-		}
+	Context("when sending a metric fails", func() {
+		BeforeEach(func() {
+			valueChainer.SendReturns(errors.New("send failed"))
+		})
+		It("should log an error when Send fails", func() {
+			ch <- time.Time{}
+			ch <- time.Time{}
 
-		go natsMonitor.Run()
-
-		ch <- time.Time{}
-		ch <- time.Time{} // an extra tick is to make sure the time ticked at least onece
-
-		Expect(lgr).To(gbytes.Say("error-sending-nats-monitor-metric"))
+			Expect(logger).To(gbytes.Say("error-sending-nats-monitor-metric"))
+		})
 	})
 
 	It("gets the number of queued messages for a given NATS subscription", func() {
-		go natsMonitor.Run()
-
 		ch <- time.Time{}
 		ch <- time.Time{}
 
-		Expect(fakeSubscription.PendingCallCount()).To(BeNumerically(">=", 1))
+		Expect(subscription.PendingCallCount()).To(BeNumerically(">=", 1))
 	})
 
-	It("passes a correct value for pending messages to the metric Sender", func() {
-		go natsMonitor.Run()
-		fakeSubscription.PendingStub = func() (int, int, error) {
-			return 1000, 0, nil
-		}
+	Context("when Pending returns a value", func() {
+		BeforeEach(func() {
+			subscription.PendingReturns(1000, 0, nil)
+		})
+		It("passes that value to the metric Sender", func() {
+			ch <- time.Time{}
+			ch <- time.Time{}
 
-		ch <- time.Time{}
-		ch <- time.Time{}
+			Expect(sender.ValueCallCount()).To(BeNumerically(">=", 1))
+			_, val, _ := sender.ValueArgsForCall(0)
 
-		Expect(sender.ValueCallCount()).To(BeNumerically(">=", 1))
-		_, val, _ := sender.ValueArgsForCall(0)
-
-		Expect(fakeSubscription.PendingCallCount()).To(BeNumerically(">=", 1))
-		Expect(val).To(Equal(float64(1000)))
-
+			Expect(subscription.PendingCallCount()).To(BeNumerically(">=", 1))
+			Expect(val).To(Equal(float64(1000)))
+		})
 	})
 
-	It("should log an error when it fails to retrieve queued messages", func() {
-		go natsMonitor.Run()
+	Context("when it fails to retrieve queued messages", func() {
+		BeforeEach(func() {
+			subscription.PendingReturns(1000, 0, errors.New("failed"))
+		})
 
-		fakeSubscription.PendingStub = func() (int, int, error) {
-			return 1000, 0, errors.New("failed")
-		}
+		It("should log an error when it fails to retrieve queued messages", func() {
+			ch <- time.Time{}
+			ch <- time.Time{}
 
-		ch <- time.Time{}
-		ch <- time.Time{} // an extra tick is to make sure the time ticked at least onece
-
-		Expect(lgr).To(gbytes.Say("error-retrieving-nats-subscription-pending-messages"))
+			Expect(logger).To(gbytes.Say("error-retrieving-nats-subscription-pending-messages"))
+		})
 	})
 })

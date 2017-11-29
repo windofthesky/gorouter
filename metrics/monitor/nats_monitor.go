@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"os"
 	"time"
 
 	"code.cloudfoundry.org/gorouter/logger"
@@ -20,7 +21,8 @@ type NATSMonitor struct {
 	Logger       logger.Logger
 }
 
-func (n *NATSMonitor) Run() {
+func (n *NATSMonitor) Run(signals <-chan os.Signal, ready chan<- struct{}) error {
+	close(ready)
 	for {
 		select {
 		case <-n.TickChan:
@@ -33,6 +35,9 @@ func (n *NATSMonitor) Run() {
 			if err != nil {
 				n.Logger.Error("error-sending-nats-monitor-metric", zap.Error(err))
 			}
+		case <-signals:
+			n.Logger.Info("exited")
+			return nil
 		}
 	}
 }
