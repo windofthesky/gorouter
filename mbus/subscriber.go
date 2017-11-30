@@ -169,6 +169,16 @@ func (s *Subscriber) Pending() (int, error) {
 	return msgs, err
 }
 
+func (s *Subscriber) Dropped() (int, error) {
+	if s.subscription == nil {
+		s.logger.Error("failed-to-get-subscription")
+		return -1, errors.New("NATS subscription is nil, Subscriber must be invoked")
+	}
+
+	dropped, err := s.subscription.Dropped()
+	return dropped, err
+}
+
 func (s *Subscriber) subscribeToGreetMessage() error {
 	_, err := s.mbusClient.Subscribe("router.greet", func(msg *nats.Msg) {
 		response, _ := s.startMessage()

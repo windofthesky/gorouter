@@ -130,7 +130,25 @@ var _ = Describe("Subscriber", func() {
 			It("returns an error", func() {
 				msgs, err := sub.Pending()
 				Expect(msgs).To(Equal(-1))
-				Expect(err).To(HaveOccurred())
+				Expect(err).To(MatchError("NATS subscription is nil, Subscriber must be invoked"))
+			})
+		})
+	})
+
+	Context("Dropped", func() {
+		It("returns the subscription Dropped value", func() {
+			process = ifrit.Invoke(sub)
+			Eventually(process.Ready()).Should(BeClosed())
+			dropped, err := sub.Dropped()
+			Expect(dropped).To(BeNumerically(">=", 0))
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		Context("when subscription is nil", func() {
+			It("returns an error", func() {
+				dropped, err := sub.Dropped()
+				Expect(dropped).To(Equal(-1))
+				Expect(err).To(MatchError("NATS subscription is nil, Subscriber must be invoked"))
 			})
 		})
 	})
