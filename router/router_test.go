@@ -77,6 +77,7 @@ var _ = Describe("Router", func() {
 		cert := test_util.CreateCert("default")
 		config.SSLCertificates = []tls.Certificate{cert}
 		config.CipherSuites = []uint16{tls.TLS_RSA_WITH_AES_256_CBC_SHA}
+		config.ClientCertificateValidation = tls.NoClientCert
 
 		natsRunner = test_util.NewNATSRunner(int(natsPort))
 		natsRunner.Start()
@@ -862,6 +863,17 @@ var _ = Describe("Router", func() {
 			clientCert      *tls.Certificate
 		)
 
+		doAndGetReceivedRequest := func() *http.Request {
+			resp, err := httpClient.Do(req)
+			Expect(err).NotTo(HaveOccurred())
+			defer resp.Body.Close()
+			Expect(resp.StatusCode).To(Equal(http.StatusTeapot))
+
+			var receivedReq *http.Request
+			Eventually(receivedReqChan).Should(Receive(&receivedReq))
+			return receivedReq
+		}
+
 		BeforeEach(func() {
 			receivedReqChan = make(chan *http.Request, 1)
 
@@ -1008,20 +1020,30 @@ var _ = Describe("Router", func() {
 					req.Header.Set("X-Forwarded-Client-Cert", "potato")
 				})
 
-				Context("when the client connects with mTLS", func() {
+				Context("when the client attempts to connect with mTLS", func() {
 					BeforeEach(func() {
 						tlsClientConfig.Certificates = []tls.Certificate{*clientCert}
 					})
 
-					It("does not remove the xfcc header", func() {
-						resp, err := httpClient.Do(req)
-						Expect(err).NotTo(HaveOccurred())
-						defer resp.Body.Close()
-						Expect(resp.StatusCode).To(Equal(http.StatusTeapot))
+					It("does remove the xfcc header (because default ClientAuth = NoClientCert, so the client cert is ignored)", func() {
+						receivedReq := doAndGetReceivedRequest()
+						Expect(receivedReq.Header.Get("X-Forwarded-Client-Cert")).To(BeEmpty())
+					})
 
-						var receivedReq *http.Request
-						Eventually(receivedReqChan).Should(Receive(&receivedReq))
-						Expect(receivedReq.Header.Get("X-Forwarded-Client-Cert")).To(Equal("potato"))
+					Context("when gorouter is configured with ClientAuth = VerifyClientCertIfGiven", func() {
+						BeforeEach(func() {
+							config.ClientCertificateValidation = tls.VerifyClientCertIfGiven
+						})
+						It("does not remove the xfcc header", func() {
+							resp, err := httpClient.Do(req)
+							Expect(err).NotTo(HaveOccurred())
+							defer resp.Body.Close()
+							Expect(resp.StatusCode).To(Equal(http.StatusTeapot))
+
+							var receivedReq *http.Request
+							Eventually(receivedReqChan).Should(Receive(&receivedReq))
+							Expect(receivedReq.Header.Get("X-Forwarded-Client-Cert")).To(Equal("potato"))
+						})
 					})
 				})
 
@@ -1110,16 +1132,28 @@ var _ = Describe("Router", func() {
 						tlsClientConfig.Certificates = []tls.Certificate{*clientCert}
 					})
 
-					It("replaces the xfcc header", func() {
-						resp, err := httpClient.Do(req)
-						Expect(err).NotTo(HaveOccurred())
-						defer resp.Body.Close()
-						Expect(resp.StatusCode).To(Equal(http.StatusTeapot))
+					Context("when gorouter is configured with ClientAuth = NoClientCert, so the client cert is ignored, behaving like non-mutual TLS", func() {
+						It("removes the xfcc header", func() {
+							receivedReq := doAndGetReceivedRequest()
+							Expect(receivedReq.Header.Get("X-Forwarded-Client-Cert")).To(BeEmpty())
+						})
+					})
 
-						var receivedReq *http.Request
-						Eventually(receivedReqChan).Should(Receive(&receivedReq))
-						xfccData := receivedReq.Header.Get("X-Forwarded-Client-Cert")
-						Expect(base64.StdEncoding.EncodeToString(clientCert.Certificate[0])).To(Equal(xfccData))
+					Context("when gorouter is configured with ClientAuth = VerifyClientCertIfGiven", func() {
+						BeforeEach(func() {
+							config.ClientCertificateValidation = tls.VerifyClientCertIfGiven
+						})
+						It("replaces the xfcc header", func() {
+							resp, err := httpClient.Do(req)
+							Expect(err).NotTo(HaveOccurred())
+							defer resp.Body.Close()
+							Expect(resp.StatusCode).To(Equal(http.StatusTeapot))
+
+							var receivedReq *http.Request
+							Eventually(receivedReqChan).Should(Receive(&receivedReq))
+							xfccData := receivedReq.Header.Get("X-Forwarded-Client-Cert")
+							Expect(base64.StdEncoding.EncodeToString(clientCert.Certificate[0])).To(Equal(xfccData))
+						})
 					})
 				})
 
@@ -1166,16 +1200,28 @@ var _ = Describe("Router", func() {
 						tlsClientConfig.Certificates = []tls.Certificate{*clientCert}
 					})
 
-					It("adds the xfcc header", func() {
-						resp, err := httpClient.Do(req)
-						Expect(err).NotTo(HaveOccurred())
-						defer resp.Body.Close()
-						Expect(resp.StatusCode).To(Equal(http.StatusTeapot))
+					Context("when gorouter is configured with ClientAuth = NoClientCert, so the client cert is ignored, behaving like non-mutual TLS", func() {
+						It("removes the xfcc header", func() {
+							receivedReq := doAndGetReceivedRequest()
+							Expect(receivedReq.Header.Get("X-Forwarded-Client-Cert")).To(BeEmpty())
+						})
+					})
 
-						var receivedReq *http.Request
-						Eventually(receivedReqChan).Should(Receive(&receivedReq))
-						xfccData := receivedReq.Header.Get("X-Forwarded-Client-Cert")
-						Expect(base64.StdEncoding.EncodeToString(clientCert.Certificate[0])).To(Equal(xfccData))
+					Context("when gorouter is configured with ClientAuth = VerifyClientCertIfGiven", func() {
+						BeforeEach(func() {
+							config.ClientCertificateValidation = tls.VerifyClientCertIfGiven
+						})
+						It("adds the xfcc header", func() {
+							resp, err := httpClient.Do(req)
+							Expect(err).NotTo(HaveOccurred())
+							defer resp.Body.Close()
+							Expect(resp.StatusCode).To(Equal(http.StatusTeapot))
+
+							var receivedReq *http.Request
+							Eventually(receivedReqChan).Should(Receive(&receivedReq))
+							xfccData := receivedReq.Header.Get("X-Forwarded-Client-Cert")
+							Expect(base64.StdEncoding.EncodeToString(clientCert.Certificate[0])).To(Equal(xfccData))
+						})
 					})
 				})
 
@@ -1505,10 +1551,39 @@ var _ = Describe("Router", func() {
 			})
 		})
 
+		Context("when gorouter is configured with ClientAuth=RequireAndVerifyClientCert but the client doesn't provide a certificate", func() {
+			BeforeEach(func() {
+				config.ClientCertificateValidation = tls.RequireAndVerifyClientCert
+			})
+
+			It("fails the connection", func() {
+				app := test.NewGreetApp([]route.Uri{"test.vcap.me"}, config.Port, mbusClient, nil)
+				app.RegisterAndListen()
+				Eventually(func() bool {
+					return appRegistered(registry, app)
+				}).Should(BeTrue())
+
+				uri := fmt.Sprintf("https://test.vcap.me:%d/", config.SSLPort)
+				req, _ := http.NewRequest("GET", uri, nil)
+				tr := &http.Transport{
+					TLSClientConfig: &tls.Config{
+						InsecureSkipVerify: true,
+						Certificates:       []tls.Certificate{ /* no client cert! */ },
+					},
+				}
+
+				client := http.Client{Transport: tr}
+				resp, err := client.Do(req)
+				Expect(err).To(MatchError(ContainSubstring("remote error: tls: bad certificate")))
+				Expect(resp).To(BeNil())
+			})
+		})
+
 		Context("when a client provides a certificate", func() {
 			var (
-				rootCert *x509.Certificate
-				rootKey  *rsa.PrivateKey
+				rootCert   *x509.Certificate
+				rootKey    *rsa.PrivateKey
+				clientCert *tls.Certificate
 			)
 
 			BeforeEach(func() {
@@ -1521,74 +1596,118 @@ var _ = Describe("Router", func() {
 				config.CACerts = []string{
 					string(rootPEM),
 				}
-			})
 
-			It("fails the connection if the certificate is invalid", func() {
-				//client presents expired certificate signed by server-trusted CA
-				badCertTemplate, err := badCertTemplate("invalidClientSSL")
-				Expect(err).ToNot(HaveOccurred())
-				clientCert, err := createClientCert(badCertTemplate, rootCert, rootKey)
-				Expect(err).ToNot(HaveOccurred())
-
-				app := test.NewGreetApp([]route.Uri{"test.vcap.me"}, config.Port, mbusClient, nil)
-				app.RegisterAndListen()
-				Eventually(func() bool {
-					return appRegistered(registry, app)
-				}).Should(BeTrue())
-
-				uri := fmt.Sprintf("https://test.vcap.me:%d/", config.SSLPort)
-				req, _ := http.NewRequest("GET", uri, nil)
-				tr := &http.Transport{
-					TLSClientConfig: &tls.Config{
-						InsecureSkipVerify: true,
-						Certificates: []tls.Certificate{
-							*clientCert,
-						},
-					},
-				}
-
-				client := http.Client{Transport: tr}
-				resp, err := client.Do(req)
-				Expect(err).To(HaveOccurred())
-				Expect(resp).To(BeNil())
-			})
-
-			It("successfully serves SSL traffic if the certificate is valid", func() {
 				clientCertTemplate, err := certTemplate("clientSSL")
 				Expect(err).ToNot(HaveOccurred())
-				clientCert, err := createClientCert(clientCertTemplate, rootCert, rootKey)
+				clientCert, err = createClientCert(clientCertTemplate, rootCert, rootKey)
 				Expect(err).ToNot(HaveOccurred())
 
-				app := test.NewGreetApp([]route.Uri{"test.vcap.me"}, config.Port, mbusClient, nil)
-				app.RegisterAndListen()
-				Eventually(func() bool {
-					return appRegistered(registry, app)
-				}).Should(BeTrue())
-
-				uri := fmt.Sprintf("https://test.vcap.me:%d/", config.SSLPort)
-				req, _ := http.NewRequest("GET", uri, nil)
-				tr := &http.Transport{
-					TLSClientConfig: &tls.Config{
-						InsecureSkipVerify: true,
-						Certificates: []tls.Certificate{
-							*clientCert,
-						},
-					},
-				}
-
-				client := http.Client{Transport: tr}
-
-				resp, err := client.Do(req)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(resp).ToNot(BeNil())
-
-				Expect(resp.StatusCode).To(Equal(http.StatusOK))
-
-				bytes, err := ioutil.ReadAll(resp.Body)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(bytes).To(ContainSubstring("Hello"))
-				defer resp.Body.Close()
 			})
+
+			Context("when the client cert is valid", func() {
+				It("successfully serves SSL traffic if the certificate is valid", func() {
+					app := test.NewGreetApp([]route.Uri{"test.vcap.me"}, config.Port, mbusClient, nil)
+					app.RegisterAndListen()
+					Eventually(func() bool {
+						return appRegistered(registry, app)
+					}).Should(BeTrue())
+
+					uri := fmt.Sprintf("https://test.vcap.me:%d/", config.SSLPort)
+					req, _ := http.NewRequest("GET", uri, nil)
+
+					tr := &http.Transport{
+						TLSClientConfig: &tls.Config{
+							InsecureSkipVerify: true,
+							Certificates: []tls.Certificate{
+								*clientCert,
+							},
+						},
+					}
+
+					client := http.Client{Transport: tr}
+					resp, err := client.Do(req)
+
+					Expect(err).ToNot(HaveOccurred())
+					Expect(resp).ToNot(BeNil())
+
+					Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+					bytes, err := ioutil.ReadAll(resp.Body)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(bytes).To(ContainSubstring("Hello"))
+					defer resp.Body.Close()
+				})
+			})
+
+			Context("when the client cert is invalid", func() {
+				BeforeEach(func() {
+					//client presents expired certificate signed by server-trusted CA
+					badCertTemplate, err := badCertTemplate("invalidClientSSL")
+					Expect(err).ToNot(HaveOccurred())
+					clientCert, err = createClientCert(badCertTemplate, rootCert, rootKey)
+					Expect(err).ToNot(HaveOccurred())
+				})
+
+				Context("when gorouter is configured with ClientAuth = NoClientCert", func() {
+					Specify("the connection succeeds because the client cert is ignored", func() {
+						app := test.NewGreetApp([]route.Uri{"test.vcap.me"}, config.Port, mbusClient, nil)
+						app.RegisterAndListen()
+						Eventually(func() bool {
+							return appRegistered(registry, app)
+						}).Should(BeTrue())
+
+						uri := fmt.Sprintf("https://test.vcap.me:%d/", config.SSLPort)
+						req, _ := http.NewRequest("GET", uri, nil)
+						tr := &http.Transport{
+							TLSClientConfig: &tls.Config{
+								InsecureSkipVerify: true,
+								Certificates: []tls.Certificate{
+									*clientCert,
+								},
+							},
+						}
+
+						client := http.Client{Transport: tr}
+						resp, err := client.Do(req)
+						Expect(err).ToNot(HaveOccurred())
+						defer resp.Body.Close()
+						Expect(resp).ToNot(BeNil())
+
+						Expect(resp.StatusCode).To(Equal(http.StatusOK))
+					})
+				})
+
+				Context("when gorouter is configured with ClientAuth = VerifyClientCertIfGiven", func() {
+					BeforeEach(func() {
+						config.ClientCertificateValidation = tls.VerifyClientCertIfGiven
+					})
+					It("fails the connection", func() {
+						app := test.NewGreetApp([]route.Uri{"test.vcap.me"}, config.Port, mbusClient, nil)
+						app.RegisterAndListen()
+						Eventually(func() bool {
+							return appRegistered(registry, app)
+						}).Should(BeTrue())
+
+						uri := fmt.Sprintf("https://test.vcap.me:%d/", config.SSLPort)
+						req, _ := http.NewRequest("GET", uri, nil)
+						tr := &http.Transport{
+							TLSClientConfig: &tls.Config{
+								InsecureSkipVerify: true,
+								Certificates: []tls.Certificate{
+									*clientCert,
+								},
+							},
+						}
+
+						client := http.Client{Transport: tr}
+
+						resp, err := client.Do(req)
+						Expect(err).To(HaveOccurred())
+						Expect(resp).To(BeNil())
+					})
+				})
+			})
+
 		})
 	})
 

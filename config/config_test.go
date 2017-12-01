@@ -12,6 +12,7 @@ import (
 	"code.cloudfoundry.org/gorouter/test_util"
 
 	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/extensions/table"
 	. "github.com/onsi/gomega"
 
 	"time"
@@ -730,7 +731,50 @@ routing_api:
 				Expect(err).ToNot(HaveOccurred())
 				rootCA2YML, err = yaml.Marshal(rootCA2Array)
 				Expect(err).ToNot(HaveOccurred())
+			})
 
+			Context("when value for client_cert_validation is set", func() {
+				createYMLSnippet := func(clientCertValidation string) []byte {
+					return []byte(fmt.Sprintf(`
+enable_ssl: true
+min_tls_version: TLSv1.1
+cipher_suites: ECDHE-RSA-AES128-GCM-SHA256
+client_cert_validation: %s
+tls_pem:
+%s%s
+`, clientCertValidation, tlsPEM1YML, tlsPEM2YML))
+				}
+				DescribeTable("client certificate validation",
+					func(clientCertValidation string, expectedAuthType tls.ClientAuthType) {
+						configBytes := createYMLSnippet(clientCertValidation)
+						err := config.Initialize(configBytes)
+						Expect(err).NotTo(HaveOccurred())
+						config.Process()
+						Expect(config.ClientCertificateValidation).To(Equal(expectedAuthType))
+					},
+					Entry("none", "none", tls.NoClientCert),
+					Entry("request", "request", tls.VerifyClientCertIfGiven),
+					Entry("require", "require", tls.RequireAndVerifyClientCert),
+				)
+
+				Context("when ClientCertificateValidation is invalid", func() {
+					var configBytes []byte
+					BeforeEach(func() {
+						configBytes = createYMLSnippet("meow")
+					})
+					It("returns a meaningful error", func() {
+						err := config.Initialize(configBytes)
+						Expect(err).NotTo(HaveOccurred())
+						defer func() {
+							if r := recover(); r != nil {
+								Expect(r).To(Equal("router.client_cert_validation must be one of 'none', 'request' or 'require'."))
+								return
+							}
+							Fail("Expected Process to panic but it didn't.")
+						}()
+						config.Process()
+					})
+				})
 			})
 
 			Context("when valid value for min_tls_version is set", func() {
@@ -739,6 +783,7 @@ routing_api:
 enable_ssl: true
 min_tls_version: TLSv1.1
 cipher_suites: ECDHE-RSA-AES128-GCM-SHA256
+client_cert_validation: none
 tls_pem:
 %s%s
 `, tlsPEM1YML, tlsPEM2YML))
@@ -748,25 +793,36 @@ tls_pem:
 					Expect(config.MinTLSVersion).To(Equal(uint16(tls.VersionTLS11)))
 				})
 			})
+
 			Context("when invalid value for min_tls_version is set", func() {
 				It("errors", func() {
 					var b = []byte(fmt.Sprintf(`
 enable_ssl: true
 min_tls_version: fake-tls
 cipher_suites: ECDHE-RSA-AES128-GCM-SHA256
+client_cert_validation: none
 tls_pem:
 %s%s
 `, tlsPEM1YML, tlsPEM2YML))
 					err := config.Initialize(b)
 					Expect(err).NotTo(HaveOccurred())
-					Expect(config.Process).To(Panic())
+					defer func() {
+						if r := recover(); r != nil {
+							Expect(r).To(Equal(`router.min_tls_version should be one of "", "TLSv1.2", "TLSv1.1", "TLSv1.0"`))
+							return
+						}
+						Fail("Expected Process to panic but it didn't.")
+					}()
+					config.Process()
 				})
 			})
+
 			Context("when min_tls_version is not set", func() {
 				It("sets the default to TLSv1.2", func() {
 					var b = []byte(fmt.Sprintf(`
 enable_ssl: true
 cipher_suites: ECDHE-RSA-AES128-GCM-SHA256
+client_cert_validation: none
 tls_pem:
 %s%s
 `, tlsPEM1YML, tlsPEM2YML))
@@ -782,6 +838,7 @@ tls_pem:
 					var b = []byte(fmt.Sprintf(`
 enable_ssl: true
 cipher_suites: TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+client_cert_validation: none
 tls_pem:
 %s%s%s
 ca_certs:
@@ -799,6 +856,7 @@ ca_certs:
 					var b = []byte(fmt.Sprintf(`
 enable_ssl: true
 cipher_suites: TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+client_cert_validation: none
 tls_pem:
 %s%s%s
 ca_certs:
@@ -825,6 +883,7 @@ ca_certs:
 					var b = []byte(fmt.Sprintf(`
 enable_ssl: true
 cipher_suites: ECDHE-RSA-AES128-GCM-SHA256
+client_cert_validation: none
 tls_pem:
 %s%s%s
 `, tlsPEM1YML, tlsPEM2YML, tlsPEM3YML))
@@ -864,6 +923,7 @@ tls_pem:
 					var b = []byte(fmt.Sprintf(`
 enable_ssl: true
 cipher_suites: ECDHE-ECDSA-AES256-GCM-SHA384
+client_cert_validation: none
 tls_pem:
 %s
 `, tlsPEMYML))
@@ -884,10 +944,18 @@ tls_pem:
 					var b = []byte(`
 enable_ssl: true
 cipher_suites: ECDHE-RSA-AES128-GCM-SHA256
+client_cert_validation: none
 `)
 					err := config.Initialize(b)
 					Expect(err).ToNot(HaveOccurred())
-					Expect(config.Process).To(Panic())
+					defer func() {
+						if r := recover(); r != nil {
+							Expect(r).To(Equal(`router.tls_pem must be provided if router.enable_ssl is set to true`))
+							return
+						}
+						Fail("Expected Process to panic but it didn't.")
+					}()
+					config.Process()
 				})
 
 				It("fails to validate if TLSPEM does not contain both key and cert", func() {
@@ -898,13 +966,21 @@ cipher_suites: ECDHE-RSA-AES128-GCM-SHA256
 					var b = []byte(fmt.Sprintf(`
 enable_ssl: true
 cipher_suites: ECDHE-RSA-AES128-GCM-SHA256
+client_cert_validation: none
 tls_pem:
 %s
 `, partialTLSPEMYML))
 					err = config.Initialize(b)
 					Expect(err).ToNot(HaveOccurred())
 
-					Expect(config.Process).To(Panic())
+					defer func() {
+						if r := recover(); r != nil {
+							Expect(r).To(ContainSubstring(`Error parsing PEM blocks of router.tls_pem, missing cert or key: `))
+							return
+						}
+						Fail("Expected Process to panic but it didn't.")
+					}()
+					config.Process()
 				})
 
 				It("fails to validate if TLSPEM does not contains an supported type", func() {
@@ -919,13 +995,21 @@ dGVzdA==
 					var b = []byte(fmt.Sprintf(`
 enable_ssl: true
 cipher_suites: ECDHE-RSA-AES128-GCM-SHA256
+client_cert_validation: none
 tls_pem:
 %s
 `, invalidTLSPEMYML))
 					err = config.Initialize(b)
 					Expect(err).ToNot(HaveOccurred())
 
-					Expect(config.Process).To(Panic())
+					defer func() {
+						if r := recover(); r != nil {
+							Expect(r).To(ContainSubstring(`error parsing router.tls_pem, found unsupported PEM block:`))
+							return
+						}
+						Fail("Expected Process to panic but it didn't.")
+					}()
+					config.Process()
 				})
 			})
 
@@ -935,6 +1019,7 @@ tls_pem:
 						var b = []byte(fmt.Sprintf(`
 enable_ssl: true
 cipher_suites: ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384
+client_cert_validation: none
 tls_pem:
 %s%s
 `, tlsPEM1YML, tlsPEM2YML))
@@ -952,11 +1037,13 @@ tls_pem:
 						Expect(config.CipherSuites).To(ConsistOf(expectedSuites))
 					})
 				})
+
 				Context("of RFC format", func() {
 					It("Construct the proper array of cipher suites", func() {
 						var b = []byte(fmt.Sprintf(`
 enable_ssl: true
 cipher_suites: TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+client_cert_validation: none
 tls_pem:
 %s%s
 `, tlsPEM1YML, tlsPEM2YML))
@@ -977,49 +1064,70 @@ tls_pem:
 			})
 
 			Context("When it is given invalid cipher suites", func() {
-				var b = []byte(fmt.Sprintf(`
+				It("panics", func() {
+					var b = []byte(fmt.Sprintf(`
 enable_ssl: true
 tls_pem:
 %s
 cipher_suites: potato
+client_cert_validation: none
 `, tlsPEM1YML))
-
-				It("panics", func() {
 					err := config.Initialize(b)
 					Expect(err).ToNot(HaveOccurred())
 
-					Expect(config.Process).To(Panic())
+					defer func() {
+						if r := recover(); r != nil {
+							Expect(r).To(ContainSubstring(`Invalid cipher string configuration: potato, please choose from `))
+							return
+						}
+						Fail("Expected Process to panic but it didn't.")
+					}()
+					config.Process()
 				})
 			})
 
 			Context("When it is given an unsupported cipher suite", func() {
-				var b = []byte(fmt.Sprintf(`
+				It("panics", func() {
+					var b = []byte(fmt.Sprintf(`
 enable_ssl: true
 tls_pem:
 %s
 cipher_suites: TLS_RSA_WITH_RC4_1280_SHA
+client_cert_validation: none
 `, tlsPEM1YML))
-
-				It("panics", func() {
 					err := config.Initialize(b)
 					Expect(err).ToNot(HaveOccurred())
 
-					Expect(config.Process).To(Panic())
+					defer func() {
+						if r := recover(); r != nil {
+							Expect(r).To(ContainSubstring(`Invalid cipher string configuration: TLS_RSA_WITH_RC4_1280_SHA, please choose from `))
+							return
+						}
+						Fail("Expected Process to panic but it didn't.")
+					}()
+					config.Process()
 				})
 			})
 
 			Context("When given no cipher suites", func() {
-				var b = []byte(fmt.Sprintf(`
+				It("panics", func() {
+					var b = []byte(fmt.Sprintf(`
 enable_ssl: true
 tls_pem:
 %s
+client_cert_validation: none
 `, tlsPEM1YML))
-
-				It("panics", func() {
 					err := config.Initialize(b)
 					Expect(err).ToNot(HaveOccurred())
 
-					Expect(config.Process).To(Panic())
+					defer func() {
+						if r := recover(); r != nil {
+							Expect(r).To(Equal(`must specify list of cipher suite when ssl is enabled`))
+							return
+						}
+						Fail("Expected Process to panic but it didn't.")
+					}()
+					config.Process()
 				})
 			})
 		})

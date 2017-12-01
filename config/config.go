@@ -128,10 +128,12 @@ type Config struct {
 	IsolationSegments        []string `yaml:"isolation_segments"`
 	RoutingTableShardingMode string   `yaml:"routing_table_sharding_mode"`
 
-	CipherString        string `yaml:"cipher_suites"`
-	CipherSuites        []uint16
-	MinTLSVersionString string `yaml:"min_tls_version"`
-	MinTLSVersion       uint16
+	CipherString                      string `yaml:"cipher_suites"`
+	CipherSuites                      []uint16
+	MinTLSVersionString               string `yaml:"min_tls_version"`
+	MinTLSVersion                     uint16
+	ClientCertificateValidationString string             `yaml:"client_cert_validation,omitempty"`
+	ClientCertificateValidation       tls.ClientAuthType `yaml:"-"`
 
 	LoadBalancerHealthyThreshold    time.Duration `yaml:"load_balancer_healthy_threshold"`
 	PublishStartMessageInterval     time.Duration `yaml:"publish_start_message_interval"`
@@ -245,6 +247,17 @@ func (c *Config) Process() {
 	}
 
 	if c.EnableSSL {
+		switch c.ClientCertificateValidationString {
+		case "none":
+			c.ClientCertificateValidation = tls.NoClientCert
+		case "request":
+			c.ClientCertificateValidation = tls.VerifyClientCertIfGiven
+		case "require":
+			c.ClientCertificateValidation = tls.RequireAndVerifyClientCert
+		default:
+			panic(`router.client_cert_validation must be one of 'none', 'request' or 'require'.`)
+		}
+
 		switch c.MinTLSVersionString {
 		case "TLSv1.0":
 			c.MinTLSVersion = tls.VersionTLS10

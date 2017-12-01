@@ -38,6 +38,7 @@ func SpecSSLConfig(statusPort, proxyPort, SSLPort uint16, natsPorts ...uint16) *
 	}
 	c.SSLPort = SSLPort
 	c.CipherString = "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384"
+	c.ClientCertificateValidationString = "request"
 
 	return c
 }
