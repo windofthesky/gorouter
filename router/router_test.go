@@ -59,13 +59,14 @@ var _ = Describe("Router", func() {
 		natsRunner *test_util.NATSRunner
 		config     *cfg.Config
 
-		mbusClient *nats.Conn
-		registry   *rregistry.RouteRegistry
-		varz       vvarz.Varz
-		router     *Router
-		logger     logger.Logger
-		statusPort uint16
-		natsPort   uint16
+		mbusClient   *nats.Conn
+		registry     *rregistry.RouteRegistry
+		varz         vvarz.Varz
+		router       *Router
+		logger       logger.Logger
+		statusPort   uint16
+		natsPort     uint16
+		fakeReporter *fakeMetrics.FakeRouteRegistryReporter
 	)
 
 	BeforeEach(func() {
@@ -86,7 +87,8 @@ var _ = Describe("Router", func() {
 
 		mbusClient = natsRunner.MessageBus
 		logger = test_util.NewTestZapLogger("router-test")
-		registry = rregistry.NewRouteRegistry(logger, config, new(fakeMetrics.FakeRouteRegistryReporter))
+		fakeReporter = new(fakeMetrics.FakeRouteRegistryReporter)
+		registry = rregistry.NewRouteRegistry(logger, config, fakeReporter)
 		varz = vvarz.NewVarz(registry)
 
 	})
@@ -142,6 +144,31 @@ var _ = Describe("Router", func() {
 			c   *cfg.Config
 			err error
 		)
+
+		It("does not immediately emit CaptureRouteRegistrationLatency metric", func() {
+			natsPort := test_util.NextAvailPort()
+			proxyPort := test_util.NextAvailPort()
+			statusPort = test_util.NextAvailPort()
+			c = test_util.SpecConfig(statusPort, proxyPort, natsPort)
+			c.StartResponseDelayInterval = 1 * time.Second
+
+			rtr, err = initializeRouter(c, registry, varz, mbusClient, logger)
+			Expect(err).ToNot(HaveOccurred())
+
+			signals := make(chan os.Signal)
+			readyChan := make(chan struct{})
+			go rtr.Run(signals, readyChan)
+			defer func() {
+				signals <- syscall.SIGUSR1
+			}()
+
+			Eventually(fakeReporter.MuzzleRouteRegistrationLatencyCallCount).Should(Equal(1))
+
+			Eventually(
+				fakeReporter.UnmuzzleRouteRegistrationLatencyCallCount,
+				c.StartResponseDelayInterval,
+			).Should(Equal(1))
+		})
 
 		It("does not immediately make the health check endpoint available", func() {
 			natsPort := test_util.NextAvailPort()

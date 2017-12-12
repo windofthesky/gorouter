@@ -309,6 +309,14 @@ func (r *RouteRegistry) SuspendPruning(f func() bool) {
 	r.Unlock()
 }
 
+func (r *RouteRegistry) MuzzleReporter() {
+	r.reporter.MuzzleRouteRegistrationLatency()
+}
+
+func (r *RouteRegistry) UnmuzzleReporter() {
+	r.reporter.UnmuzzleRouteRegistrationLatency()
+}
+
 // bulk update to mark pool / endpoints as updated
 func (r *RouteRegistry) freshenRoutes() {
 	now := time.Now()

@@ -35,9 +35,15 @@ type FakeRouteRegistryReporter struct {
 	captureRouteRegistrationLatencyArgsForCall []struct {
 		t time.Duration
 	}
-	CaptureUnregistryMessageStub        func(msg metrics.ComponentTagged)
-	captureUnregistryMessageMutex       sync.RWMutex
-	captureUnregistryMessageArgsForCall []struct {
+	MuzzleRouteRegistrationLatencyStub          func()
+	muzzleRouteRegistrationLatencyMutex         sync.RWMutex
+	muzzleRouteRegistrationLatencyArgsForCall   []struct{}
+	UnmuzzleRouteRegistrationLatencyStub        func()
+	unmuzzleRouteRegistrationLatencyMutex       sync.RWMutex
+	unmuzzleRouteRegistrationLatencyArgsForCall []struct{}
+	CaptureUnregistryMessageStub                func(msg metrics.ComponentTagged)
+	captureUnregistryMessageMutex               sync.RWMutex
+	captureUnregistryMessageArgsForCall         []struct {
 		msg metrics.ComponentTagged
 	}
 	invocations      map[string][][]interface{}
@@ -165,6 +171,38 @@ func (fake *FakeRouteRegistryReporter) CaptureRouteRegistrationLatencyArgsForCal
 	return fake.captureRouteRegistrationLatencyArgsForCall[i].t
 }
 
+func (fake *FakeRouteRegistryReporter) MuzzleRouteRegistrationLatency() {
+	fake.muzzleRouteRegistrationLatencyMutex.Lock()
+	fake.muzzleRouteRegistrationLatencyArgsForCall = append(fake.muzzleRouteRegistrationLatencyArgsForCall, struct{}{})
+	fake.recordInvocation("MuzzleRouteRegistrationLatency", []interface{}{})
+	fake.muzzleRouteRegistrationLatencyMutex.Unlock()
+	if fake.MuzzleRouteRegistrationLatencyStub != nil {
+		fake.MuzzleRouteRegistrationLatencyStub()
+	}
+}
+
+func (fake *FakeRouteRegistryReporter) MuzzleRouteRegistrationLatencyCallCount() int {
+	fake.muzzleRouteRegistrationLatencyMutex.RLock()
+	defer fake.muzzleRouteRegistrationLatencyMutex.RUnlock()
+	return len(fake.muzzleRouteRegistrationLatencyArgsForCall)
+}
+
+func (fake *FakeRouteRegistryReporter) UnmuzzleRouteRegistrationLatency() {
+	fake.unmuzzleRouteRegistrationLatencyMutex.Lock()
+	fake.unmuzzleRouteRegistrationLatencyArgsForCall = append(fake.unmuzzleRouteRegistrationLatencyArgsForCall, struct{}{})
+	fake.recordInvocation("UnmuzzleRouteRegistrationLatency", []interface{}{})
+	fake.unmuzzleRouteRegistrationLatencyMutex.Unlock()
+	if fake.UnmuzzleRouteRegistrationLatencyStub != nil {
+		fake.UnmuzzleRouteRegistrationLatencyStub()
+	}
+}
+
+func (fake *FakeRouteRegistryReporter) UnmuzzleRouteRegistrationLatencyCallCount() int {
+	fake.unmuzzleRouteRegistrationLatencyMutex.RLock()
+	defer fake.unmuzzleRouteRegistrationLatencyMutex.RUnlock()
+	return len(fake.unmuzzleRouteRegistrationLatencyArgsForCall)
+}
+
 func (fake *FakeRouteRegistryReporter) CaptureUnregistryMessage(msg metrics.ComponentTagged) {
 	fake.captureUnregistryMessageMutex.Lock()
 	fake.captureUnregistryMessageArgsForCall = append(fake.captureUnregistryMessageArgsForCall, struct {
@@ -202,6 +240,10 @@ func (fake *FakeRouteRegistryReporter) Invocations() map[string][][]interface{} 
 	defer fake.captureRegistryMessageMutex.RUnlock()
 	fake.captureRouteRegistrationLatencyMutex.RLock()
 	defer fake.captureRouteRegistrationLatencyMutex.RUnlock()
+	fake.muzzleRouteRegistrationLatencyMutex.RLock()
+	defer fake.muzzleRouteRegistrationLatencyMutex.RUnlock()
+	fake.unmuzzleRouteRegistrationLatencyMutex.RLock()
+	defer fake.unmuzzleRouteRegistrationLatencyMutex.RUnlock()
 	fake.captureUnregistryMessageMutex.RLock()
 	defer fake.captureUnregistryMessageMutex.RUnlock()
 	copiedInvocations := map[string][][]interface{}{}
