@@ -84,10 +84,7 @@ var _ = Describe("RouteRegistry", func() {
 				Expect(latency).To(BeNumerically("~", 3*time.Second, 1*time.Millisecond))
 			})
 
-			It("muzzles CaptureRouteRegistryLatency metric", func() {
-				r.MuzzleReporter()
-				Expect(reporter.MuzzleRouteRegistrationLatencyCallCount()).To(Equal(1))
-
+			It("Unmuzzles CaptureRouteRegistryLatency metric", func() {
 				r.UnmuzzleReporter()
 				Expect(reporter.UnmuzzleRouteRegistrationLatencyCallCount()).To(Equal(1))
 			})

@@ -309,10 +309,6 @@ func (r *RouteRegistry) SuspendPruning(f func() bool) {
 	r.Unlock()
 }
 
-func (r *RouteRegistry) MuzzleReporter() {
-	r.reporter.MuzzleRouteRegistrationLatency()
-}
-
 func (r *RouteRegistry) UnmuzzleReporter() {
 	r.reporter.UnmuzzleRouteRegistrationLatency()
 }

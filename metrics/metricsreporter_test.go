@@ -460,23 +460,18 @@ var _ = Describe("MetricsReporter", func() {
 	})
 
 	Describe("CaptureRouteRegistrationLatency", func() {
-		It("sends route registration latency", func() {
+		It("is muzzled by default", func() {
+			metricReporter.CaptureRouteRegistrationLatency(2 * time.Second)
+			Expect(sender.SendValueCallCount()).To(Equal(0))
+		})
+		It("sends router registration latency when unmuzzled", func() {
+			metricReporter.UnmuzzleRouteRegistrationLatency()
 			metricReporter.CaptureRouteRegistrationLatency(2 * time.Second)
 			Expect(sender.SendValueCallCount()).To(Equal(1))
 			name, value, unit := sender.SendValueArgsForCall(0)
 			Expect(name).To(Equal("route_registration_latency"))
 			Expect(value).To(BeEquivalentTo(2000))
 			Expect(unit).To(Equal("ms"))
-		})
-
-		It("does not emit while it is muzzled", func() {
-			metricReporter.MuzzleRouteRegistrationLatency()
-			metricReporter.CaptureRouteRegistrationLatency(2 * time.Second)
-			Expect(sender.SendValueCallCount()).To(Equal(0))
-
-			metricReporter.UnmuzzleRouteRegistrationLatency()
-			metricReporter.CaptureRouteRegistrationLatency(2 * time.Second)
-			Expect(sender.SendValueCallCount()).To(Equal(1))
 		})
 	})
 

@@ -162,8 +162,6 @@ var _ = Describe("Router", func() {
 				signals <- syscall.SIGUSR1
 			}()
 
-			Eventually(fakeReporter.MuzzleRouteRegistrationLatencyCallCount).Should(Equal(1))
-
 			Eventually(
 				fakeReporter.UnmuzzleRouteRegistrationLatencyCallCount,
 				c.StartResponseDelayInterval,

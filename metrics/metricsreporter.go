@@ -12,9 +12,9 @@ import (
 )
 
 type MetricsReporter struct {
-	Sender  metrics.MetricSender
-	Batcher metrics.MetricBatcher
-	muzzled uint64
+	Sender    metrics.MetricSender
+	Batcher   metrics.MetricBatcher
+	unmuzzled uint64
 }
 
 func (m *MetricsReporter) CaptureBackendExhaustedConns() {
@@ -84,16 +84,12 @@ func (m *MetricsReporter) CaptureLookupTime(t time.Duration) {
 	m.Sender.SendValue("route_lookup_time", float64(t.Nanoseconds()), unit)
 }
 
-func (m *MetricsReporter) MuzzleRouteRegistrationLatency() {
-	atomic.StoreUint64(&m.muzzled, 1)
-}
-
 func (m *MetricsReporter) UnmuzzleRouteRegistrationLatency() {
-	atomic.StoreUint64(&m.muzzled, 0)
+	atomic.StoreUint64(&m.unmuzzled, 1)
 }
 
 func (m *MetricsReporter) CaptureRouteRegistrationLatency(t time.Duration) {
-	if atomic.LoadUint64(&m.muzzled) == 0 {
+	if atomic.LoadUint64(&m.unmuzzled) == 1 {
 		m.Sender.SendValue("route_registration_latency", float64(t/time.Millisecond), "ms")
 	}
 }
