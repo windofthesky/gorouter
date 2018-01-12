@@ -384,7 +384,7 @@ var _ = Describe("Route Services", func() {
 					resp := test_util.NewResponse(http.StatusOK)
 					req, _ := conn.ReadRequest()
 
-					Expect(req.Host).ToNot(Equal("my_app.com"))
+					Expect(req.Host).To(Equal("route_service.com"))
 					metaHeader := req.Header.Get(routeservice.HeaderKeyMetadata)
 					sigHeader := req.Header.Get(routeservice.HeaderKeySignature)
 
@@ -441,7 +441,7 @@ var _ = Describe("Route Services", func() {
 					resp := test_util.NewResponse(http.StatusOK)
 					req, _ := conn.ReadRequest()
 
-					Expect(req.Host).ToNot(Equal("my_app.com"))
+					Expect(req.Host).To(Equal("route_service.com"))
 					metaHeader := req.Header.Get(routeservice.HeaderKeyMetadata)
 					sigHeader := req.Header.Get(routeservice.HeaderKeySignature)
 

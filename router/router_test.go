@@ -16,6 +16,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/http/httputil"
 	"os"
 	"syscall"
@@ -23,6 +24,7 @@ import (
 
 	"code.cloudfoundry.org/gorouter/access_log"
 	"code.cloudfoundry.org/gorouter/common/schema"
+	"code.cloudfoundry.org/gorouter/common/secure"
 	cfg "code.cloudfoundry.org/gorouter/config"
 	"code.cloudfoundry.org/gorouter/handlers"
 	"code.cloudfoundry.org/gorouter/mbus"
@@ -950,6 +952,42 @@ var _ = Describe("Router", func() {
 						receivedReq := doAndGetReceivedRequest()
 						Expect(receivedReq.Header.Get("X-Forwarded-Client-Cert")).To(Equal("potato"))
 					})
+
+					Context("when a route service is bound to the requested route", func() {
+						var (
+							appListener        net.Listener
+							routeServiceServer *httptest.Server
+						)
+						BeforeEach(func() {
+							// set up a route service for test.vcap.me
+							routeServiceHandler := func(w http.ResponseWriter, req *http.Request) {
+								defer GinkgoRecover()
+
+								Expect(req.Header.Get("X-Forwarded-Client-Cert")).To(Equal("potato"))
+								w.Write([]byte("got the correct xfcc header"))
+							}
+							routeServiceServer = httptest.NewServer(http.HandlerFunc(routeServiceHandler))
+
+							appListener = test_util.RegisterHandler(registry, "test.vcap.me", func(conn *test_util.HttpConn) {
+								defer GinkgoRecover()
+								resp := test_util.NewResponse(http.StatusOK)
+								conn.WriteResponse(resp)
+								Fail("Should not get here")
+							}, test_util.RegisterConfig{RouteServiceUrl: routeServiceServer.URL})
+						})
+						AfterEach(func() {
+							Expect(appListener.Close()).To(Succeed())
+							routeServiceServer.Close()
+						})
+
+						FIt("passes the XFCC header along to the route service", func() {
+							resp, err := httpClient.Do(req)
+							Expect(err).NotTo(HaveOccurred())
+							defer resp.Body.Close()
+							Expect(resp.StatusCode).To(Equal(http.StatusOK))
+							Expect(ioutil.ReadAll(resp.Body)).To(Equal([]byte("got the correct xfcc header")))
+						})
+					})
 				})
 
 				Context("when the client connects with regular (non-mutual) TLS", func() {
@@ -1032,6 +1070,42 @@ var _ = Describe("Router", func() {
 						It("does not remove the xfcc header", func() {
 							receivedReq := doAndGetReceivedRequest()
 							Expect(receivedReq.Header.Get("X-Forwarded-Client-Cert")).To(Equal("potato"))
+						})
+
+						Context("when a route service is bound to the requested route", func() {
+							var (
+								appListener        net.Listener
+								routeServiceServer *httptest.Server
+							)
+							BeforeEach(func() {
+								// set up a route service for test.vcap.me
+								routeServiceHandler := func(w http.ResponseWriter, req *http.Request) {
+									defer GinkgoRecover()
+
+									Expect(req.Header.Get("X-Forwarded-Client-Cert")).To(Equal("potato"))
+									w.Write([]byte("got the correct xfcc header"))
+								}
+								routeServiceServer = httptest.NewServer(http.HandlerFunc(routeServiceHandler))
+
+								appListener = test_util.RegisterHandler(registry, "test.vcap.me", func(conn *test_util.HttpConn) {
+									defer GinkgoRecover()
+									resp := test_util.NewResponse(http.StatusOK)
+									conn.WriteResponse(resp)
+									Fail("Should not get here")
+								}, test_util.RegisterConfig{RouteServiceUrl: routeServiceServer.URL})
+							})
+							AfterEach(func() {
+								Expect(appListener.Close()).To(Succeed())
+								routeServiceServer.Close()
+							})
+
+							FIt("passes the XFCC header along to the route service", func() {
+								resp, err := httpClient.Do(req)
+								Expect(err).NotTo(HaveOccurred())
+								defer resp.Body.Close()
+								Expect(resp.StatusCode).To(Equal(http.StatusOK))
+								Expect(ioutil.ReadAll(resp.Body)).To(Equal([]byte("got the correct xfcc header")))
+							})
 						})
 					})
 				})
@@ -1118,6 +1192,43 @@ var _ = Describe("Router", func() {
 							receivedReq := doAndGetReceivedRequest()
 							xfccData := receivedReq.Header.Get("X-Forwarded-Client-Cert")
 							Expect(base64.StdEncoding.EncodeToString(clientCert.Certificate[0])).To(Equal(xfccData))
+						})
+
+						Context("when a route service is bound to the requested route", func() {
+							var (
+								appListener        net.Listener
+								routeServiceServer *httptest.Server
+							)
+							BeforeEach(func() {
+								// set up a route service for test.vcap.me
+								routeServiceHandler := func(w http.ResponseWriter, req *http.Request) {
+									defer GinkgoRecover()
+
+									xfccData := req.Header.Get("X-Forwarded-Client-Cert")
+									Expect(base64.StdEncoding.EncodeToString(clientCert.Certificate[0])).To(Equal(xfccData))
+									w.Write([]byte("got the correct xfcc header"))
+								}
+								routeServiceServer = httptest.NewServer(http.HandlerFunc(routeServiceHandler))
+
+								appListener = test_util.RegisterHandler(registry, "test.vcap.me", func(conn *test_util.HttpConn) {
+									defer GinkgoRecover()
+									resp := test_util.NewResponse(http.StatusOK)
+									conn.WriteResponse(resp)
+									Fail("Should not get here")
+								}, test_util.RegisterConfig{RouteServiceUrl: routeServiceServer.URL})
+							})
+							AfterEach(func() {
+								Expect(appListener.Close()).To(Succeed())
+								routeServiceServer.Close()
+							})
+
+							FIt("sets the XFCC header on the request to the route service", func() {
+								resp, err := httpClient.Do(req)
+								Expect(err).NotTo(HaveOccurred())
+								defer resp.Body.Close()
+								Expect(resp.StatusCode).To(Equal(http.StatusOK))
+								Expect(ioutil.ReadAll(resp.Body)).To(Equal([]byte("got the correct xfcc header")))
+							})
 						})
 					})
 				})
@@ -1805,7 +1916,10 @@ func initializeRouter(config *cfg.Config, registry *rregistry.RouteRegistry, var
 	batcher := new(fakeMetrics.MetricBatcher)
 	metricReporter := &metrics.MetricsReporter{Sender: sender, Batcher: batcher}
 	combinedReporter := &metrics.CompositeReporter{VarzReporter: varz, ProxyReporter: metricReporter}
-	routeServiceConfig := routeservice.NewRouteServiceConfig(logger, true, config.EndpointTimeout, nil, nil, false)
+
+	crypto, err := secure.NewAesGCM([]byte("ABCDEFGHIJKLMNOP"))
+	Expect(err).NotTo(HaveOccurred())
+	routeServiceConfig := routeservice.NewRouteServiceConfig(logger, true, config.EndpointTimeout, crypto, nil, false)
 
 	p := proxy.NewProxy(logger, &access_log.NullAccessLogger{}, config, registry, combinedReporter,
 		routeServiceConfig, &tls.Config{}, nil)
