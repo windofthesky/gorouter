@@ -68,6 +68,7 @@ func NewProxyRoundTripper(
 	secureCookies bool,
 	localPort uint16,
 	errorHandler errorHandler,
+	gorouterToken string,
 ) ProxyRoundTripper {
 	return &roundTripper{
 		logger:              logger,
@@ -78,6 +79,7 @@ func NewProxyRoundTripper(
 		roundTripperFactory: roundTripperFactory,
 		retryableClassifier: retryableClassifier,
 		errorHandler:        errorHandler,
+		gorouterToken:       gorouterToken,
 	}
 }
 
@@ -90,6 +92,7 @@ type roundTripper struct {
 	roundTripperFactory RoundTripperFactory
 	retryableClassifier fails.Classifier
 	errorHandler        errorHandler
+	gorouterToken       string
 }
 
 func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -161,6 +164,7 @@ func (rt *roundTripper) RoundTrip(request *http.Request) (*http.Response, error)
 				// request from the gorouter will go to a backend using TLS (if tls_port is set on that endpoint)
 				request.URL.Scheme = "http"
 				request.URL.Host = fmt.Sprintf("localhost:%d", rt.localPort)
+				request.Header.Set("X-CF-Proxy-Token", rt.gorouterToken)
 			}
 			tr := GetRoundTripper(endpoint, rt.roundTripperFactory)
 			res, err = tr.RoundTrip(request)

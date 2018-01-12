@@ -14,15 +14,24 @@ const xfcc = "X-Forwarded-Client-Cert"
 
 type clientCert struct {
 	forwardingMode string
+	// not sure what type this should actually be
+	gorouterToken string
 }
 
-func NewClientCert(forwardingMode string) negroni.Handler {
+func NewClientCert(forwardingMode, gorouterToken string) negroni.Handler {
 	return &clientCert{
 		forwardingMode: forwardingMode,
+		gorouterToken:  gorouterToken,
 	}
 }
 
 func (c *clientCert) ServeHTTP(rw http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
+	if r.Header.Get("X-CF-Proxy-Token") == c.gorouterToken {
+		// the desired XFCC behavior has already happened,
+		// so we should just forward the existing header
+		next(rw, r)
+	}
+
 	if c.forwardingMode == config.FORWARD {
 		if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 			r.Header.Del(xfcc)

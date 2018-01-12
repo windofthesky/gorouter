@@ -147,9 +147,12 @@ func NewProxy(
 		Template: httpTransportTemplate,
 	}
 
+	// not sure how or where we should generate this
+	gorouterToken := "some-gorouter-token"
+
 	rproxy := &httputil.ReverseProxy{
 		Director:       p.setupProxyRequest,
-		Transport:      p.proxyRoundTripper(roundTripperFactory, fails.RetriableClassifiers, c.Port),
+		Transport:      p.proxyRoundTripper(roundTripperFactory, fails.RetriableClassifiers, c.Port, gorouterToken),
 		FlushInterval:  50 * time.Millisecond,
 		BufferPool:     p.bufferPool,
 		ModifyResponse: p.modifyResponse,
@@ -162,7 +165,7 @@ func NewProxy(
 	n.Use(handlers.NewVcapRequestIdHeader(logger))
 	n.Use(handlers.NewHTTPStartStop(dropsonde.DefaultEmitter, logger))
 	if c.ForwardedClientCert != config.ALWAYS_FORWARD {
-		n.Use(handlers.NewClientCert(c.ForwardedClientCert))
+		n.Use(handlers.NewClientCert(c.ForwardedClientCert, gorouterToken))
 	}
 	n.Use(handlers.NewAccessLog(accessLogger, zipkinHandler.HeadersToLog(), logger))
 	n.Use(handlers.NewReporter(reporter, logger))
@@ -191,7 +194,7 @@ func hostWithoutPort(req *http.Request) string {
 }
 
 func (p *proxy) proxyRoundTripper(roundTripperFactory round_tripper.RoundTripperFactory,
-	retryableClassifier fails.Classifier, port uint16) round_tripper.ProxyRoundTripper {
+	retryableClassifier fails.Classifier, port uint16, gorouterToken string) round_tripper.ProxyRoundTripper {
 	return round_tripper.NewProxyRoundTripper(
 		roundTripperFactory, retryableClassifier, p.logger,
 		p.defaultLoadBalance, p.reporter, p.secureCookies, port,
@@ -199,6 +202,7 @@ func (p *proxy) proxyRoundTripper(roundTripperFactory round_tripper.RoundTripper
 			MetricReporter: p.reporter,
 			ErrorSpecs:     round_tripper.DefaultErrorSpecs,
 		},
+		gorouterToken,
 	)
 }
 
